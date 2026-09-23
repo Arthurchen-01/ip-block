@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EgressGuard · 零泄漏闸门</title>
+<style>
+:root{
+  --bg:#0d1117; --bg2:#161b22; --bg3:#1c2129; --bd:#30363d;
+  --fg:#e6edf3; --fg2:#8b949e; --fg3:#6e7681;
+  --ok:#3fb950; --warn:#d29922; --bad:#f85149; --info:#58a6ff; --acc:#a371f7;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font:13px/1.5 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;padding:14px 16px 40px;overflow-x:hidden}
+a{color:var(--info)}
+h1{font-size:17px;font-weight:600;letter-spacing:.5px}
+h2{font-size:13px;font-weight:600;color:var(--fg2);margin-bottom:9px;letter-spacing:.4px;text-transform:uppercase}
+code,.mono{font-family:Consolas,"Cascadia Mono",monospace;font-size:12px}
+
+/* ---- 顶栏 ---- */
+header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--bd);margin-bottom:14px}
+.brand{display:flex;align-items:center;gap:9px}
+.dot{width:11px;height:11px;border-radius:50%;background:var(--fg3);box-shadow:0 0 0 0 rgba(0,0,0,0)}
+.dot.on{background:var(--ok);animation:pulse 2s infinite}
+.dot.off{background:var(--fg3)}
+.dot.bad{background:var(--bad);animation:pulse 1s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.55)}70%{box-shadow:0 0 0 9px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+.spacer{flex:1}
+.badge{padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid var(--bd);background:var(--bg3);white-space:nowrap}
+.badge.ok{color:var(--ok);border-color:#238636}
+.badge.warn{color:var(--warn);border-color:#9e6a03}
+.badge.bad{color:var(--bad);border-color:#da3633}
+.badge.info{color:var(--info);border-color:#1f6feb}
+.badge.acc{color:var(--acc);border-color:#8957e5}
+
+/* ---- 总开关 ---- */
+.master{display:flex;align-items:center;gap:12px;background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:10px 14px}
+.switch{position:relative;width:60px;height:30px;flex:0 0 auto;cursor:pointer}
+.switch input{opacity:0;width:0;height:0}
+.slider{position:absolute;inset:0;background:#30363d;border-radius:30px;transition:.22s}
+.slider:before{content:"";position:absolute;height:22px;width:22px;left:4px;top:4px;background:#e6edf3;border-radius:50%;transition:.22s}
+input:checked+.slider{background:var(--ok)}
+input:checked+.slider:before{transform:translateX(30px)}
+.switch.sm{width:44px;height:24px}
+.switch.sm .slider:before{height:18px;width:18px;left:3px;top:3px}
+.switch.sm input:checked+.slider:before{transform:translateX(20px)}
+
+/* ---- 布局 ---- */
+.grid{display:grid;gap:12px}
+.g4{grid-template-columns:repeat(4,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:1fr 1fr}
+@media(max-width:1100px){.g4{grid-template-columns:repeat(2,1fr)}.g2,.g3{grid-template-columns:1fr}}
+.card{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:12px 14px}
+.card.tight{padding:9px 12px}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:12px}
+.kv .k{color:var(--fg2);flex:0 0 auto}
+.kv .v{text-align:right;word-break:break-all}
+.big{font-size:20px;font-weight:600;letter-spacing:.5px}
+.sub{color:var(--fg2);font-size:11px;margin-top:2px}
+
+/* ---- 体检条 ---- */
+.checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.check{border-radius:8px;padding:8px 10px;border:1px solid var(--bd);background:var(--bg3);border-left-width:3px}
+.check.pass{border-left-color:var(--ok)}
+.check.fail{border-left-color:var(--bad)}
+.check.unknown{border-left-color:var(--warn)}
+.check .n{font-size:11px;color:var(--fg2)}
+.check .t{font-weight:600;font-size:12px;margin-top:1px;word-break:break-all}
+
+/* ---- 表格 ---- */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:var(--fg2);font-weight:600;font-size:11px;padding:6px 7px;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--bg2);z-index:1;white-space:nowrap}
+td{padding:5px 7px;border-bottom:1px solid #21262d;vertical-align:top}
+tr.critical td{background:rgba(248,81,73,.10)}
+tr.high td{background:rgba(210,153,34,.08)}
+tr.low td{opacity:.62}
+tr:hover td{background:rgba(88,166,255,.09)}
+.scroll{max-height:330px;overflow:auto;border:1px solid var(--bd);border-radius:8px;background:var(--bg2)}
+.scroll.short{max-height:250px}
+
+/* ---- 按钮 ---- */
+button{background:var(--bg3);color:var(--fg);border:1px solid var(--bd);border-radius:7px;padding:6px 12px;font-size:12px;cursor:pointer;font-family:inherit;transition:.14s}
+button:hover{border-color:var(--info);color:var(--info)}
+button.primary{background:#238636;border-color:#2ea043;color:#fff}
+button.primary:hover{background:#2ea043;color:#fff}
+button.danger{background:#8b1a1a;border-color:#da3633;color:#fff}
+button.danger:hover{background:#da3633;color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+.btnrow{display:flex;gap:7px;flex-wrap:wrap}
+
+/* ---- 事件流 ---- */
+.ev{padding:5px 9px;border-left:3px solid var(--bd);margin-bottom:4px;background:var(--bg3);border-radius:0 6px 6px 0;font-size:12px}
+.ev.critical{border-left-color:var(--bad)}
+.ev.high{border-left-color:var(--warn)}
+.ev.medium{border-left-color:var(--info)}
+.ev.info{border-left-color:var(--fg3)}
+.ev .h{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.ev .tm{color:var(--fg3);font-size:11px}
+.ev .ti{font-weight:600}
+.ev .dt{color:var(--fg2);margin-top:1px;word-break:break-all}
+
+input[type=text],input[type=number],select{background:var(--bg3);border:1px solid var(--bd);color:var(--fg);border-radius:6px;padding:5px 8px;font-size:12px;font-family:inherit;width:100%}
+label.f{display:block;margin-bottom:7px}
+label.f .lb{display:block;color:var(--fg2);font-size:11px;margin-bottom:3px}
+.hint{color:var(--fg3);font-size:11px;margin-top:4px}
+#toast{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:7px;z-index:99}
+.tmsg{background:var(--bg3);border:1px solid var(--bd);border-left:3px solid var(--info);border-radius:7px;padding:8px 13px;font-size:12px;max-width:430px;box-shadow:0 5px 18px rgba(0,0,0,.5)}
+.tmsg.bad{border-left-color:var(--bad)}
+.tmsg.ok{border-left-color:var(--ok)}
+.tabs{display:flex;gap:5px;margin-bottom:9px}
+.tabs button{padding:4px 11px;font-size:12px}
+.tabs button.active{background:var(--info);border-color:var(--info);color:#0d1117;font-weight:600}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot off" id="dot"></span><h1>EgressGuard</h1></div>
+  <span class="badge" id="bMode">—</span>
+  <span class="badge" id="bAdmin">—</span>
+  <span class="badge" id="bTun">—</span>
+  <span class="badge" id="bEgress">—</span>
+  <span class="badge" id="bFw">—</span>
+  <div class="spacer"></div>
+  <div class="master">
+    <span style="font-size:12px;color:var(--fg2)">闸门</span>
+    <label class="switch"><input type="checkbox" id="swEnable"><span class="slider"></span></label>
+    <span style="font-size:12px;color:var(--fg2);border-left:1px solid var(--bd);padding-left:12px">演练</span>
+    <label class="switch sm"><input type="checkbox" id="swDry"><span class="slider"></span></label>
+  </div>
+</header>
+
+<!-- 状态卡 -->
+<div class="grid g4" style="margin-bottom:12px">
+  <div class="card">
+    <h2>出口</h2>
+    <div class="big" id="egIp">—</div>
+    <div class="sub" id="egGeo">—</div>
+  </div>
+  <div class="card">
+    <h2>隧道</h2>
+    <div class="big" id="tunName">—</div>
+    <div class="sub" id="tunInfo">—</div>
+  </div>
+  <div class="card">
+    <h2>本次运行</h2>
+    <div class="big" id="cntBlocked">0</div>
+    <div class="sub" id="cntDetail">—</div>
+  </div>
+  <div class="card">
+    <h2>指纹素材</h2>
+    <div class="big" id="fpCount">0</div>
+    <div class="sub" id="fpDetail">—</div>
+  </div>
+</div>
+
+<!-- 体检 -->
+<div class="card" style="margin-bottom:12px">
+  <h2>泄漏体检</h2>
+  <div class="checks" id="checks"><div class="check unknown"><div class="n">尚未体检</div><div class="t">点右侧「跑一次体检」</div></div></div>
+</div>
+
+<!-- 活跃判定 -->
+<div class="card" style="margin-bottom:12px">
+  <h2>活跃判定 <span id="afCount" style="color:var(--bad)"></span></h2>
+  <div class="scroll short"><table>
+    <thead><tr><th style="width:66px">级别</th><th style="width:130px">判定</th><th style="width:130px">程序</th><th>连接</th><th style="width:90px">网卡</th></tr></thead>
+    <tbody id="tbActive"><tr><td colspan="5" style="color:var(--fg3)">暂无</td></tr></tbody>
+  </table></div>
+</div>
+
+<div class="grid g2" style="margin-bottom:12px">
+  <!-- 连接表 -->
+  <div class="card">
+    <h2>实时连接（按严重度排序）</h2>
+    <div class="tabs">
+      <button class="active" data-filter="all">全部</button>
+      <button data-filter="critical">只看泄漏</button>
+      <button data-filter="tunnel">只看隧道内</button>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th style="width:150px">程序</th><th>本地</th><th>远端</th><th style="width:96px">判定</th></tr></thead>
+      <tbody id="tbConn"><tr><td colspan="4" style="color:var(--fg3)">加载中…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <!-- 事件流 -->
+  <div class="card">
+    <h2>事件流</h2>
+    <div class="scroll" id="evBox"></div>
+  </div>
+</div>
+
+<div class="grid g2">
+  <!-- 操作 -->
+  <div class="card">
+    <h2>操作</h2>
+    <div class="btnrow" style="margin-bottom:9px">
+      <button class="primary" onclick="act('leak_test')">跑一次体检</button>
+      <button onclick="act('probe')">立刻探测出口</button>
+      <button onclick="act('calibrate')">标定真实 IP</button>
+    </div>
+    <div class="btnrow" style="margin-bottom:9px">
+      <button onclick="act('enable_firewall')">启用防火墙</button>
+      <button onclick="act('install_static')">装常备规则</button>
+      <button onclick="act('clear_rules')">清空规则</button>
+    </div>
+    <div class="btnrow" style="margin-bottom:9px">
+      <button onclick="disableIpv6All()">关闭物理网卡 IPv6</button>
+      <button onclick="act('neutralize_hostname',{name:'HOST'})">中性化主机名</button>
+    </div>
+    <div class="btnrow" style="margin-bottom:9px">
+      <button onclick="act('list_bypass')">查绕过隧道的路由</button>
+      <button onclick="if(confirm('删除所有绕过隧道的具体主机路由？\n\n删掉之后，原本被这些路由带出隧道的流量会重新走 TUN（VPN 出口）。\n注意：如果某个程序是显式绑定物理网卡的，删路由对它无效，只能靠掐断。'))act('clear_bypass')">清掉绕过路由（导回隧道）</button>
+    </div>
+    <div class="btnrow" style="margin-bottom:9px">
+      <button onclick="act('detect_proxy')">探测隧道代理端口</button>
+      <button onclick="guideProxy()">引导系统代理到隧道</button>
+      <button onclick="act('clear_system_proxy')">关闭系统代理</button>
+    </div>
+    <div class="btnrow">
+      <button class="danger" onclick="if(confirm('紧急恢复：删除 EgressGuard 的全部防火墙规则并把出站策略恢复为 Allow。\n\n确定要放开网络吗？'))act('panic')">紧急恢复网络</button>
+    </div>
+    <div class="hint" id="admHint"></div>
+    <div class="hint" style="margin-top:6px;border-top:1px solid var(--bd);padding-top:6px">
+      <b>关于「引导到隧道」</b>：EgressGuard <b>做不到</b>把一条已经建立的连接改道进隧道 ——
+      那条连接显式绑定了物理网卡，根本不进 TUN，用户态没有 API 能把它转进去。<br>
+      真正有效的引导是两件事：<b>①掐断 → 逼它重连</b>（重连时不显式绑网卡就会走 TUN）；
+      <b>②把系统代理指向隧道端口</b>（浏览器等读系统代理的程序会主动走隧道）。<br>
+      隔离粒度默认是「程序→目标」而不是「程序」—— 因为 python.exe / java.exe / svchost.exe
+      这类共用宿主一个 exe 承载无数程序，按程序封杀会让一个脚本裸奔连坐掉所有同类程序。<br><br>
+      <b>能真正"导回 VPN 出口"的只有一件事</b>：<b>删掉让它绕过隧道的路由</b>。
+      实测（tests/exp_guide_to_tunnel.py）：删掉那条指向物理网卡的主机路由后，
+      按路由表走的程序重连时源地址会变成 198.18.x.x —— 进了隧道。<br>
+      但对<b>显式绑定物理网卡</b>的程序，删路由也没用（实测源地址不变），
+      那种只能掐断。你机器上绕过隧道的连接基本都是后者。
+    </div>
+  </div>
+
+  <!-- 配置 -->
+  <div class="card">
+    <h2>配置</h2>
+    <label class="f"><span class="lb">处置动作</span>
+      <select id="cfgAction">
+        <option value="notify_only">只通知（不动连接）</option>
+        <option value="block_new">阻断该程序后续出站</option>
+        <option value="block_and_kill">阻断 + 掐断已建立连接</option>
+        <option value="block_kill_proc">阻断 + 掐断 + 终结进程</option>
+      </select></label>
+    <div class="grid g2" style="gap:9px">
+      <label class="f"><span class="lb">轮询间隔 (ms)</span><input type="number" id="cfgPoll" min="100" step="50"></label>
+      <label class="f"><span class="lb">出口探测间隔 (s)</span><input type="number" id="cfgProbe" min="10" step="10"></label>
+    </div>
+    <label class="f"><span class="lb">程序白名单（逗号分隔，隧道自身必须在内）</span>
+      <input type="text" id="cfgAllow" placeholder="iKuuuVPNCore.exe,iKuuuVPN.exe"></label>
+    <label class="f"><span class="lb">手动封杀的出口 IP（逗号分隔）</span>
+      <input type="text" id="cfgBlocked" placeholder="例如 27.44.127.109"></label>
+    <label class="f"><span class="lb">手动隔离某程序（填 exe 全路径）</span>
+      <input type="text" id="cfgQuar" placeholder="C:\path\to\app.exe"></label>
+    <div class="btnrow">
+      <button class="primary" onclick="saveCfg()">保存配置</button>
+      <button onclick="act('quarantine',{exe:document.getElementById('cfgQuar').value,reason:'手动隔离'})">隔离该程序</button>
+      <button onclick="act('release',{exe:document.getElementById('cfgQuar').value})">解除隔离</button>
+    </div>
+    <div class="hint">配置改动即时生效，不需要重启守护。白名单按进程名匹配，不区分大小写。</div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+let connFilter = 'all';
+let lastSeq = 0;
+const events = [];
+
+function q(p){ return TOKEN ? (p + (p.includes('?')?'&':'?') + 'token=' + encodeURIComponent(TOKEN)) : p; }
+
+async function api(path, body){
+  const opt = body ? {method:'POST', headers:{'Content-Type':'application/json','X-EG-Token':TOKEN}, body:JSON.stringify(body)}
+                   : {headers:{'X-EG-Token':TOKEN}};
+  const r = await fetch(q('/api/'+path), opt);
+  const t = await r.text();
+  try { return JSON.parse(t); } catch(e) { return {error:t}; }
+}
+function toast(msg, cls){
+  const d = document.createElement('div');
+  d.className = 'tmsg ' + (cls||'');
+  d.textContent = msg;
+  document.getElementById('toast').appendChild(d);
+  setTimeout(()=>d.remove(), 6000);
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ---------- 渲染 ---------- */
+let curStatus = null;
+
+function renderStatus(s){
+  curStatus = s;
+  const on = s.enabled;
+  document.getElementById('dot').className = 'dot ' + (on ? (s.tunnel_ok ? 'on':'bad') : 'off');
+  const bm = document.getElementById('bMode');
+  bm.textContent = s.mode + (on && !s.dry_run ? '（实弹）' : on ? '（演练）' : '（观察）');
+  bm.className = 'badge ' + (on && !s.dry_run ? 'bad' : on ? 'warn' : 'info');
+
+  const ba = document.getElementById('bAdmin');
+  ba.textContent = s.is_admin ? '管理员' : '普通权限';
+  ba.className = 'badge ' + (s.is_admin ? 'ok' : 'warn');
+
+  const bt = document.getElementById('bTun');
+  bt.textContent = s.tunnel_ok ? '隧道在线' : '隧道已断';
+  bt.className = 'badge ' + (s.tunnel_ok ? 'ok' : 'bad');
+
+  const eg = s.egress || {};
+  const d = eg.default || {};
+  const be = document.getElementById('bEgress');
+  if (d.ip) { be.textContent = d.ip; be.className = 'badge ' + (eg.verdict && eg.verdict.startsWith('泄漏') ? 'bad' : 'ok'); }
+  else { be.textContent = '出口未知'; be.className = 'badge warn'; }
+
+  const fw = s.firewall || {};
+  const vals = Object.values(fw).filter(v=>v && typeof v === 'object');
+  const allOn = vals.length && vals.every(v=>v.enabled);
+  const bf = document.getElementById('bFw');
+  bf.textContent = allOn ? '防火墙开' : '防火墙关';
+  bf.className = 'badge ' + (allOn ? 'ok' : 'bad');
+
+  document.getElementById('swEnable').checked = !!s.enabled;
+  document.getElementById('swDry').checked = !!s.dry_run;
+
+  document.getElementById('egIp').textContent = d.ip || '—';
+  document.getElementById('egGeo').textContent = d.ok
+    ? [d.country, d.region, d.city, d.isp].filter(Boolean).join(' · ')
+    : (d.error || '—');
+
+  const tn = (s.tunnels||[]).map(t=>t.alias).join(', ') || '无';
+  document.getElementById('tunName').textContent = tn;
+  const t0 = (s.tunnels||[])[0];
+  document.getElementById('tunInfo').textContent = t0
+    ? `${(t0.ipv4||[]).join(', ')} · DNS ${(t0.dns||[]).join(', ')||'—'}`
+    : '未检测到隧道网卡';
+
+  const c = s.counters || {};
+  document.getElementById('cntBlocked').textContent = (c.killed||0) + (c.blocked_targets||0);
+  document.getElementById('cntDetail').textContent =
+    `判定 ${c.findings||0} · 掐断 ${c.killed||0} · 封目标 ${c.blocked_targets||0} · 整程序隔离 ${c.quarantined||0} · 通知 ${c.notices||0} · 探测 ${c.probes||0}`;
+
+  const needles = (s.policy && s.policy.needles) || [];
+  document.getElementById('fpCount').textContent = needles.length;
+  document.getElementById('fpDetail').textContent = needles.slice(0,3).map(n=>n.kind).join(' · ') + (needles.length>3?' …':'');
+
+  // 活跃判定
+  const af = s.active_findings || [];
+  document.getElementById('afCount').textContent = af.length ? `（${af.length}）` : '';
+  document.getElementById('tbActive').innerHTML = af.length ? af.map(f=>`
+    <tr class="${f.severity}">
+      <td><span class="badge ${f.severity==='critical'?'bad':f.severity==='high'?'warn':'info'}">${esc(f.severity)}</span></td>
+      <td><b>${esc(f.title)}</b><div class="sub">${esc(f.code)}</div></td>
+      <td>${esc(f.process||'—')}<div class="sub">PID ${f.pid}</div></td>
+      <td class="mono">${esc(f.local||'')} → ${esc(f.remote||'')}<div class="sub">${esc(f.detail).slice(0,150)}</div></td>
+      <td>${esc(f.iface||'—')}</td>
+    </tr>`).join('') : '<tr><td colspan="5" style="color:var(--fg3)">暂无 —— 当前没有检测到泄漏</td></tr>';
+
+  // 配置回填（只在没有焦点时，避免打断输入）
+  const cfg = {action:s.action, poll:s.poll_interval_ms, probe:s.probe_interval_s};
+  const ae = document.activeElement;
+  if (ae && ae.id && ae.id.startsWith('cfg')) { /* 正在输入，跳过 */ }
+  else {
+    document.getElementById('cfgAction').value = s.action || 'block_and_kill';
+  }
+  document.getElementById('admHint').textContent = s.is_admin
+    ? '以管理员运行：所有阻断能力可用。'
+    : '⚠ 当前是普通权限：只能检测和通知，不能改防火墙、不能掐断连接。请用「安装_右键管理员运行.bat」装提权守护。';
+}
+
+function renderConn(j){
+  const rows = (j.rows||[]).filter(r=>{
+    if (connFilter==='critical') return r.severity==='critical';
+    if (connFilter==='tunnel') return r.tunnel;
+    return true;
+  });
+  document.getElementById('tbConn').innerHTML = rows.length ? rows.slice(0,220).map(r=>`
+    <tr class="${r.severity}">
+      <td>${esc(r.process)}<div class="sub">PID ${r.pid} · ${esc(r.proto)}/${esc(r.state)}</div></td>
+      <td class="mono">${esc(r.local)}</td>
+      <td class="mono">${esc(r.remote)}</td>
+      <td><span class="badge ${r.severity==='critical'?'bad':r.severity==='low'?'':'ok'}" style="font-size:10px;padding:2px 6px">${esc(r.verdict)}</span></td>
+    </tr>`).join('') : '<tr><td colspan="4" style="color:var(--fg3)">无匹配连接</td></tr>';
+}
+
+function renderEvents(list){
+  const box = document.getElementById('evBox');
+  box.innerHTML = list.slice().reverse().map(e=>`
+    <div class="ev ${e.severity}">
+      <div class="h"><span class="tm">${esc(e.time||'')}</span>
+        <span class="ti">${esc(e.title||e.kind)}</span>
+        ${e.process?`<span class="badge" style="font-size:10px;padding:1px 6px">${esc(e.process)}</span>`:''}
+      </div>
+      <div class="dt">${esc(e.detail||'')}</div>
+    </div>`).join('') || '<div style="color:var(--fg3)">暂无事件</div>';
+}
+
+function renderChecks(rep){
+  document.getElementById('checks').innerHTML = (rep.items||[]).map(i=>`
+    <div class="check ${i.verdict}">
+      <div class="n">${esc(i.name)}</div>
+      <div class="t">${esc(i.value)}</div>
+    </div>`).join('');
+}
+
+/* ---------- 轮询 ---------- */
+async function tickStatus(){
+  try { renderStatus(await api('status')); } catch(e){}
+}
+async function tickConn(){
+  try { renderConn(await api('connections')); } catch(e){}
+}
+async function tickEvents(){
+  try {
+    const j = await api('events?n=90&min_severity=low');
+    renderEvents(j.events||[]);
+  } catch(e){}
+}
+
+/* ---------- 动作 ---------- */
+async function act(name, body){
+  const j = await api('action', Object.assign({action:name}, body||{}));
+  if (j.error) { toast('失败：' + j.error, 'bad'); return j; }
+  if (j.details) toast((j.details||[]).join(' ｜ '), 'ok');
+  else if (j.detail) toast(j.detail, j.ok===false?'bad':'ok');
+  if (j.items) { renderChecks(j); toast(`体检完成：${j.pass} 项通过 / ${j.fail} 项不通过`, j.fail?'bad':'ok'); }
+  tickStatus();
+  return j;
+}
+async function disableIpv6All(){
+  const s = curStatus; if (!s) return;
+  const phys = (s.physical||[]).filter(a=>a.ipv6_global && a.ipv6_global.length);
+  if (!phys.length) { toast('没有检测到带全局 IPv6 的物理网卡'); return; }
+  for (const a of phys){
+    if (!confirm(`关闭 ${a.alias} 上的 IPv6 协议？\n\n这会让 ${a.ipv6_global[0]} 这个公网 IPv6 地址消失，堵死旁路通道。\n需要管理员权限。`)) continue;
+    await act('disable_ipv6', {alias:a.alias});
+  }
+}
+async function guideProxy(){
+  const d = await act('detect_proxy');
+  const srv = d && d.detail ? (String(d.detail).match(/127\.0\.0\.1:\d+/) || [])[0] : null;
+  if (!srv){
+    toast('没探测到隧道客户端的本地代理端口（试过 7890/7897/7891/10809/10808/1080/2080）。' +
+          'iKuuu 若是纯 TUN 模式可能不开本地端口，这条路走不通 —— 那就只靠「掐断→逼重连」来引导。', 'bad');
+    return;
+  }
+  if (!confirm(`把系统代理指向 ${srv} ？\n\n生效范围：浏览器、以及任何读系统代理(WinINET)的程序。\n不生效：自己管网络栈的程序（多数国产 IM、游戏、显式绑网卡的程序）。`)) return;
+  await act('set_system_proxy', {server: srv});
+}
+async function saveCfg(){
+  const patch = {
+    action: document.getElementById('cfgAction').value,
+    poll_interval_ms: +document.getElementById('cfgPoll').value || 250,
+    probe_interval_s: +document.getElementById('cfgProbe').value || 60,
+    allow_processes: document.getElementById('cfgAllow').value.split(',').map(s=>s.trim()).filter(Boolean),
+    blocked_ips: document.getElementById('cfgBlocked').value.split(',').map(s=>s.trim()).filter(Boolean),
+  };
+  const j = await api('config', patch);
+  toast(j.error ? ('保存失败：'+j.error) : '配置已保存并生效', j.error?'bad':'ok');
+  tickStatus();
+}
+
+document.getElementById('swEnable').addEventListener('change', async e=>{
+  const on = e.target.checked;
+  if (on && curStatus && curStatus.dry_run){
+    toast('已开启闸门（演练模式）：会判定并通知，但不动连接。确认无漏报后再关掉演练。','ok');
+  }
+  await api('toggle', {enabled:on});
+  tickStatus();
+});
+document.getElementById('swDry').addEventListener('change', async e=>{
+  const dry = e.target.checked;
+  if (!dry && confirm('关掉演练模式 = 进入实弹：检测到泄漏会真的掐断连接、隔离程序。\n\n确定吗？')){
+    await api('toggle', {dry_run:false, enabled:true});
+  } else if (dry){
+    await api('toggle', {dry_run:true});
+  } else {
+    e.target.checked = true; return;
+  }
+  tickStatus();
+});
+document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click', ()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  connFilter = b.dataset.filter;
+  tickConn();
+}));
+
+(async function boot(){
+  await tickStatus();
+  const s = curStatus || {};
+  const cfg = await api('config');
+  if (!cfg.error){
+    document.getElementById('cfgPoll').value = cfg.poll_interval_ms;
+    document.getElementById('cfgProbe').value = cfg.probe_interval_s;
+    document.getElementById('cfgAllow').value = (cfg.allow_processes||[]).join(',');
+    document.getElementById('cfgBlocked').value = (cfg.blocked_ips||[]).join(',');
+    document.getElementById('cfgAction').value = cfg.action;
+  }
+  tickConn(); tickEvents();
+  setInterval(tickStatus, 2000);
+  setInterval(tickConn, 3000);
+  setInterval(tickEvents, 2500);
+  if (!TOKEN) toast('未带 token，写操作会失败。请从「启动仪表盘.bat」打开。','bad');
+})();
+</script>
+</body>
+</html>

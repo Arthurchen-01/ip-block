@@ -1,0 +1,13 @@
+# EgressGuard 依赖
+#
+# 核心守护（eg/winapi, netinfo, policy, enforce, notify, core）只用 Python 标准库，
+# 不装任何第三方包也能跑。以下是**可选增强**：
+#
+#   pywebview  —— 仪表盘的原生窗口（WebView2）。不装则自动回退浏览器模式，功能一样。
+#   pywin32    —— 事件日志通知走 ReportEvent（比 eventcreate 稳，且普通权限也能写）。
+#                 不装则自动降级到 eventcreate / .NET。
+#
+# 本机实测已装：pywebview 6.2.1 / pywin32 312
+
+pywebview>=4.0
+pywin32>=305

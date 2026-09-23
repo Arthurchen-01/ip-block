@@ -1,0 +1,25 @@
+# EgressGuard 打包与运行产物（不入版本库）
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+
+# 运行时数据（统一在 %LOCALAPPDATA%\EgressGuard\，这里只是防止误提交）
+data/
+*.jsonl
+state.json
+remediation.json
+last_violation.json
+
+# 日志与临时物
+*.log
+_dbg_*
+_bat_*.txt
+_*.ps1
+_*.txt
+_*.json
+
+# 凭据绝不入库
+*token*
+*credential*
