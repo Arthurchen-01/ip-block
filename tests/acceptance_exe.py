@@ -27,6 +27,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
 import time
 from pathlib import Path
 
@@ -744,6 +745,118 @@ def e8_tray_and_icon() -> None:
         kill_exe("msedgewebview2.exe")
 
 
+def e9_traffic_dashboard(token: str) -> None:
+    """v1.3.0 新增：流量监督台（地图 / 指纹 / 时间线 / 谁在控制流量）。
+
+    这一段验的是"用户能不能看见当前流量在发生什么"：
+      - /api/traffic 给出真实字节速率 + 每进程活动度
+      - /api/timeline 给出可画成泳道的时间线
+      - /api/fingerprint 给出对外暴露的指纹与逐项状态
+      - /assets/world_land.js 能取到（离线世界地图，不依赖外部服务）
+      - 页面里真的有地图/指纹/时间线/进程列表这四个 DOM 容器
+
+    ⚠ 有一条必须记住的诚实边界：**每进程的字节数拿不到**。
+    Windows 不通过用户态 API 暴露它（GetPerTcpConnectionEStats 在本机返回 1784，
+    ETW 可行但 10 秒产生 5.6MB CSV，做常驻监控太重）。
+    所以每进程显示的是"连接活动度"，接口里必须明确标出来 —— 不能假装是流量。
+    """
+    section("E9 · 流量监督台（地图 / 指纹 / 时间线 / 谁在控制流量）")
+
+    base = f"http://127.0.0.1:{API_PORT}"
+
+    def get(p, timeout=30):
+        try:
+            req = urllib.request.Request(base + p,
+                                         headers={"X-EG-Token": token})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8", "replace"))
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+
+    # 1. 真实字节速率
+    t = get("/api/traffic?top=20")
+    if t.get("error"):
+        check("GET /api/traffic 可用", False, str(t["error"])[:200])
+    else:
+        tot = t.get("total") or {}
+        check("GET /api/traffic 可用", "in_bps" in tot and "out_bps" in tot,
+              f"↓{tot.get('in_h')} ↑{tot.get('out_h')}")
+        ad = t.get("adapters") or []
+        # 去重是否生效：真实网卡只有物理 + 隧道两张，
+        # 不去重的话 QoS/WFP/Filter 驱动层会各报一份一模一样的计数
+        check("网卡速率已去重（只剩真实网卡，不是 40 多个过滤驱动层）",
+              0 < len(ad) <= 8,
+              f"{len(ad)} 张：" + ", ".join(a.get("alias", "")[:18] for a in ad))
+        procs = t.get("processes") or []
+        check("按进程给出了活动度视图", bool(procs),
+              f"{len(procs)} 个进程，首个={procs[0].get('name') if procs else '—'}")
+        check("接口明确标注了「活动度不是字节数」（不假装）",
+              "活动度" in str(t.get("metric_note") or "")
+              and "不是字节数" in str(t.get("metric_note") or ""),
+              str(t.get("metric_note"))[:130])
+        check("内核持有的连接单独统计，不混进泄漏数",
+              "kernel_held_connections" in t,
+              f"裸奔={t.get('leaked_connections')} "
+              f"内核持有={t.get('kernel_held_connections')}")
+
+    # 2. 时间线
+    tl = get("/api/timeline?seconds=120&buckets=40")
+    if tl.get("error"):
+        check("GET /api/timeline 可用", False, str(tl["error"])[:160])
+    else:
+        check("GET /api/timeline 可用", "series" in tl and "buckets" in tl,
+              f"{len(tl.get('series') or [])} 条泳道 / "
+              f"{len(tl.get('buckets') or [])} 个桶")
+        check("时间线泳道带泄漏标记（能看出哪条是红的）",
+              all("leaked" in s for s in (tl.get("series") or [])[:3])
+              if tl.get("series") else True,
+              "有 leaked 字段" if tl.get("series") else "还没有样本")
+
+    # 3. 指纹面板
+    f = get("/api/fingerprint")
+    if f.get("error"):
+        check("GET /api/fingerprint 可用", False, str(f["error"])[:160])
+    else:
+        items = f.get("items") or []
+        check("GET /api/fingerprint 可用", bool(items),
+              f"{len(items)} 项：{f.get('verdict')}")
+        st = {i.get("status") for i in items}
+        check("指纹按暴露程度分了状态（不是一律标红）",
+              st <= {"exposed", "blocked", "lan_only", "risk"} and len(st) >= 2,
+              "状态集合=" + ",".join(sorted(st)))
+        check("每一项都带「为什么/怎么处理」的说明",
+              all(i.get("how") for i in items),
+              "；".join(i.get("how", "")[:30] for i in items[:2]))
+
+    # 4. 单点地理（地图打点用）
+    g = get("/api/geo?ip=8.8.8.8")
+    check("GET /api/geo 可用（地图打点靠它）",
+          "lat" in g and "lon" in g, str(g)[:120])
+
+    # 5. 离线世界地图数据
+    try:
+        req = urllib.request.Request(base + "/assets/world_land.js")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = r.read().decode("utf-8", "replace")
+        check("世界地图数据可取（离线内嵌，不依赖外部地图服务）",
+              "EG_WORLD" in body and len(body) > 5000,
+              f"{len(body) // 1024} KB，含 {body.count('[')} 组坐标")
+    except Exception as e:
+        check("世界地图数据可取", False, f"{type(e).__name__}: {e}")
+
+    # 6. 页面里真的有那四个容器
+    try:
+        req = urllib.request.Request(base + f"/?token={token}")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            html = r.read().decode("utf-8", "replace")
+        for elem, name in (("worldMap", "世界地图"), ("fpList", "指纹面板"),
+                           ("timeline", "时间线"), ("procList", "谁在控制流量")):
+            check(f"页面含「{name}」容器", f'id="{elem}"' in html, elem)
+        check("页面引了地图数据脚本", "/assets/world_land.js" in html, "")
+    except Exception as e:
+        check("页面可取", False, f"{type(e).__name__}: {e}")
+
+
 def main() -> int:
     global _LOGFH
     ap = argparse.ArgumentParser()
@@ -827,10 +940,23 @@ def main() -> int:
         e6_dashboard()
         e7_no_python_needed()
         e8_tray_and_icon()
+        if daemon:
+            e9_traffic_dashboard(token)
     except BaseException:
         import traceback
         check("验收流程未抛异常", False, traceback.format_exc()[-800:])
     finally:
+        # ⚠ 退出前必须把 selftest_mode 关掉。
+        #   实测踩到过：验收打开它之后就再没关，于是之后所有真实泄漏的通知
+        #   都被标成「【自测流量，不是真实泄漏】」—— 用户看到真实泄漏
+        #   却以为是测试噪音，这比不通知还糟。
+        try:
+            if token:
+                api_post("/api/config", token, {"selftest_mode": False})
+                out("  [清理] selftest_mode 已复位")
+        except Exception as ex:
+            out(f"  [清理告警] selftest_mode 复位失败：{ex}")
+
         for name, fn in (
             ("撤死亡开关", lambda: disarm_deadman()),
             ("删测试路由", lambda: del_test_route(TARGET_IP)),

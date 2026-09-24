@@ -111,6 +111,90 @@ label.f .lb{display:block;color:var(--fg2);font-size:11px;margin-bottom:3px}
 .tabs{display:flex;gap:5px;margin-bottom:9px}
 .tabs button{padding:4px 11px;font-size:12px}
 .tabs button.active{background:var(--info);border-color:var(--info);color:#0d1117;font-weight:600}
+
+/* ===================== 流量监督台 ===================== */
+.tghead{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+.tghead h2{margin:0}
+.livedot{width:8px;height:8px;border-radius:50%;background:var(--ok);display:inline-block;
+  animation:egpulse 1.6s ease-in-out infinite}
+@keyframes egpulse{0%,100%{opacity:1}50%{opacity:.25}}
+.rates{margin-left:auto;display:flex;gap:18px;align-items:baseline;font-variant-numeric:tabular-nums}
+.rate{font-size:12px;color:var(--fg3)}
+.rate b{font-size:20px;font-weight:600;margin-left:3px}
+.rate.down b{color:var(--info)}
+.rate.up b{color:var(--acc)}
+.ratenote{font-size:10px;color:var(--fg3)}
+
+.tgmain{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(250px,1fr);gap:12px}
+@media(max-width:1040px){.tgmain{grid-template-columns:1fr}}
+.mapwrap{position:relative;background:#070e18;border:1px solid var(--bd);
+  border-radius:8px;overflow:hidden}
+#worldMap{display:block;width:100%;height:auto}
+.land{fill:#18293c;stroke:#28425e;stroke-width:.5}
+.gr{stroke:#12202f;stroke-width:.4;fill:none}
+.dot{fill:var(--info);opacity:.9}
+.dot.leak{fill:var(--bad)}
+.dot.local{fill:#4a5561}
+.dot.exit{fill:var(--ok);stroke:#0d1117;stroke-width:1.5}
+.dotlabel{fill:var(--fg2);font-size:9px;pointer-events:none}
+.maplegend{position:absolute;left:8px;bottom:6px;font-size:10px;color:var(--fg3);
+  display:flex;gap:12px;background:rgba(7,14,24,.75);padding:3px 7px;border-radius:5px}
+.maplegend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}
+
+.sidebar{display:flex;flex-direction:column;gap:10px;min-width:0}
+.panel{background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:9px 11px}
+.panel h3{margin:0 0 7px;font-size:11px;color:var(--fg2);letter-spacing:.4px}
+.fpitem{display:flex;gap:7px;padding:4px 0;border-bottom:1px dashed #20272f;font-size:11px}
+.fpitem:last-child{border-bottom:none}
+.fptag{flex:0 0 60px;font-size:10px;padding:1px 0;border-radius:4px;text-align:center;
+  height:16px;line-height:15px;white-space:nowrap}
+.fptag.exposed{background:rgba(248,81,73,.16);color:var(--bad);border:1px solid rgba(248,81,73,.4)}
+.fptag.blocked{background:rgba(63,185,80,.14);color:var(--ok);border:1px solid rgba(63,185,80,.35)}
+.fptag.lan_only{background:rgba(139,148,158,.13);color:var(--fg2);border:1px solid #30363d}
+.fptag.risk{background:rgba(210,153,34,.14);color:var(--warn);border:1px solid rgba(210,153,34,.35)}
+.fpval{flex:1;min-width:0}
+.fpval .k{color:var(--fg3);font-size:10px}
+.fpval .v{font-family:ui-monospace,Consolas,monospace;font-size:11px;word-break:break-all;
+  color:var(--fg)}
+.fpval .h{color:var(--fg3);font-size:10px;margin-top:1px;line-height:1.35}
+
+.tlwrap{margin-top:12px;border-top:1px solid var(--bd);padding-top:10px}
+.tlrow{display:grid;grid-template-columns:172px 1fr;gap:8px;align-items:center;margin-bottom:2px}
+.tlname{font-size:11px;color:var(--fg2);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;text-align:right;font-family:ui-monospace,Consolas,monospace}
+.tlcells{display:flex;gap:1px;height:13px}
+.tlcell{flex:1;border-radius:2px;background:#141a21;min-width:1px}
+.tlaxis{display:grid;grid-template-columns:172px 1fr;gap:8px;font-size:10px;
+  color:var(--fg3);margin-top:5px}
+.tlaxis .r{display:flex;justify-content:space-between}
+
+.proc{border:1px solid var(--bd);border-radius:7px;margin-bottom:5px;background:var(--bg2);
+  overflow:hidden}
+.prochead{display:flex;align-items:center;gap:9px;padding:7px 10px;cursor:pointer}
+.prochead:hover{background:var(--bg3)}
+.prochead .nm{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:230px}
+.prochead .st{font-size:11px;color:var(--fg3);font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.prochead .bar{flex:1;height:5px;background:#141a21;border-radius:3px;overflow:hidden;
+  max-width:150px;min-width:40px}
+.prochead .bar i{display:block;height:100%;border-radius:3px;
+  background:linear-gradient(90deg,var(--info),var(--acc))}
+.prochead .bar.leak i{background:linear-gradient(90deg,#f85149,#d29922)}
+.procbad{font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(248,81,73,.16);
+  color:var(--bad);border:1px solid rgba(248,81,73,.35);white-space:nowrap}
+.procok{font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(63,185,80,.12);
+  color:var(--ok);border:1px solid rgba(63,185,80,.3);white-space:nowrap}
+.procdest{padding:0 10px 8px 10px;display:none}
+.proc.open .procdest{display:block}
+.destline{display:flex;gap:8px;padding:2px 0;font-size:11px;
+  font-family:ui-monospace,Consolas,monospace;border-top:1px dashed #20272f}
+.destline .ip{color:var(--fg3);min-width:132px}
+.destline .geo{flex:1;color:var(--fg2)}
+.destline .geo b{color:var(--fg);font-weight:500}
+.metricnote{font-size:10px;color:var(--fg3);margin-top:6px;line-height:1.5;
+  border-left:2px solid var(--warn);padding-left:7px}
+
 </style>
 </head>
 <body>
@@ -156,6 +240,64 @@ label.f .lb{display:block;color:var(--fg2);font-size:11px;margin-bottom:3px}
 </div>
 
 <!-- 体检 -->
+<!-- ===================== 流量监督台 ===================== -->
+<div class="card" style="margin-bottom:12px">
+  <div class="tghead">
+    <h2>流量监督台</h2>
+    <span class="livedot"></span>
+    <span class="ratenote" id="tgConn">—</span>
+    <div class="rates">
+      <span class="rate down">下行<b id="rateDown">—</b></span>
+      <span class="rate up">上行<b id="rateUp">—</b></span>
+    </div>
+  </div>
+
+  <div class="tgmain">
+    <div class="mapwrap">
+      <svg id="worldMap" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
+        <g id="mapGraticule"></g>
+        <g id="mapLand"></g>
+        <g id="mapDots"></g>
+      </svg>
+      <div class="maplegend">
+        <span><i style="background:#58a6ff"></i>走隧道</span>
+        <span><i style="background:#f85149"></i>绕过隧道</span>
+        <span><i style="background:#4a5561"></i>内网</span>
+        <span><i style="background:#3fb950"></i>本机出口</span>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <div class="panel">
+        <h3>当前出口（对端看到的你）</h3>
+        <div id="exitBox" style="font-size:12px;color:var(--fg2)">加载中…</div>
+      </div>
+      <div class="panel">
+        <h3>对外暴露的本机指纹 <span id="fpVerdict" style="color:var(--fg3);font-weight:400"></span></h3>
+        <div id="fpList" style="max-height:290px;overflow:auto">加载中…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tlwrap">
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:7px">
+      <b style="font-size:12px">时间线</b>
+      <span style="font-size:11px;color:var(--fg3)" id="tlNote">
+        最近 5 分钟 · 泳道深浅 = 该进程的网络活动度
+      </span>
+    </div>
+    <div id="timeline"><div style="color:var(--fg3);font-size:12px">采样中…</div></div>
+  </div>
+</div>
+
+<!-- ===================== 谁在控制流量 ===================== -->
+<div class="card" style="margin-bottom:12px">
+  <h2>谁在控制流量 <span style="color:var(--fg3);font-weight:400;font-size:11px">
+    （点一行展开目的地）</span></h2>
+  <div id="procList"><div style="color:var(--fg3);font-size:12px">采样中…</div></div>
+  <div class="metricnote" id="metricNote"></div>
+</div>
+
 <div class="card" style="margin-bottom:12px">
   <h2>泄漏体检</h2>
   <div class="checks" id="checks"><div class="check unknown"><div class="n">尚未体检</div><div class="t">点右侧「跑一次体检」</div></div></div>
@@ -272,6 +414,7 @@ label.f .lb{display:block;color:var(--fg2);font-size:11px;margin-bottom:3px}
 <script>
 const TOKEN = new URLSearchParams(location.search).get('token') || '';
 let connFilter = 'all';
+let LAST_STATUS = null;
 let lastSeq = 0;
 const events = [];
 
@@ -297,6 +440,7 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;'
 let curStatus = null;
 
 function renderStatus(s){
+  LAST_STATUS = s;
   curStatus = s;
   const on = s.enabled;
   document.getElementById('dot').className = 'dot ' + (on ? (s.tunnel_ok ? 'on':'bad') : 'off');
@@ -506,8 +650,249 @@ document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',
   setInterval(tickStatus, 2000);
   setInterval(tickConn, 3000);
   setInterval(tickEvents, 2500);
+
+
+
   if (!TOKEN) toast('未带 token，写操作会失败。请从「启动仪表盘.bat」打开。','bad');
 })();
+
+/* ===================== 流量监督台（渲染） ===================== */
+let WORLD_DRAWN = false, LAST_TRAFFIC = null, PROC_OPEN = {};
+// 出口坐标缓存：出口 IP 很少变，查到一次就留着，不用每 2 秒问一遍
+let EXIT_GEO = null, EXIT_GEO_IP = null;
+
+async function ensureExitGeo(eg){
+  if (!eg || !eg.ip) return null;
+  if (EXIT_GEO_IP === eg.ip && EXIT_GEO) return EXIT_GEO;
+  EXIT_GEO_IP = eg.ip;
+  EXIT_GEO = null;
+  try {
+    const g = await api('geo?ip=' + encodeURIComponent(eg.ip));
+    if (g && g.lat != null){ EXIT_GEO = g; }
+  } catch(e){}
+  return EXIT_GEO;
+}
+
+function projX(lon){ return (lon + 180) / 360 * 1000; }
+function projY(lat){ return (90 - lat) / 180 * 500; }
+
+async function loadWorld(){
+  if (WORLD_DRAWN) return;
+  try {
+    const r = await fetch(q('/assets/world_land.js'));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const txt = await r.text();
+    (new Function(txt))();
+    const polys = window.EG_WORLD || [];
+    const parts = [];
+    for (const flat of polys){
+      let x = 0, y = 0, d = '';
+      for (let i = 0; i < flat.length; i += 2){
+        if (i === 0){ x = flat[0]; y = flat[1]; }
+        else { x += flat[i]; y += flat[i+1]; }
+        d += (i === 0 ? 'M' : 'L') + projX(x/10).toFixed(1) + ' ' +
+             projY(y/10).toFixed(1);
+      }
+      if (d) parts.push(d + 'Z');
+    }
+    document.getElementById('mapLand').innerHTML =
+      '<path class="land" d="' + parts.join('') + '"/>';
+    WORLD_DRAWN = true;
+  } catch(e){ console.warn('世界地图加载失败', e); }
+}
+
+function drawGraticule(){
+  let s = '';
+  for (let lon = -180; lon <= 180; lon += 30)
+    s += '<line class="gr" x1="'+projX(lon)+'" y1="0" x2="'+projX(lon)+'" y2="500"/>';
+  for (let lat = -60; lat <= 60; lat += 30)
+    s += '<line class="gr" x1="0" y1="'+projY(lat)+'" x2="1000" y2="'+projY(lat)+'"/>';
+  document.getElementById('mapGraticule').innerHTML = s;
+}
+
+function renderMap(t, exitGeo){
+  const dots = [], seen = {};
+  for (const p of (t.processes || [])){
+    for (const d of (p.destinations || [])){
+      if (d.lat == null || d.lon == null) continue;
+      if (seen[d.ip]){ seen[d.ip].n++; continue; }
+      const o = { ip: d.ip, lat: d.lat, lon: d.lon, n: 1,
+                  leak: p.leaked > 0, local: !!d.local,
+                  label: [d.city, d.country].filter(Boolean).join(' ') };
+      seen[d.ip] = o; dots.push(o);
+    }
+  }
+  let s = '';
+  for (const d of dots){
+    const cls = d.local ? 'dot local' : (d.leak ? 'dot leak' : 'dot');
+    const r = Math.min(9, 2.4 + Math.log2(d.n + 1) * 1.6);
+    s += '<circle class="'+cls+'" cx="'+projX(d.lon).toFixed(1)+'" cy="'+
+         projY(d.lat).toFixed(1)+'" r="'+r.toFixed(1)+'"><title>'+
+         esc(d.ip + '  ' + (d.label||''))+'</title></circle>';
+  }
+  if (exitGeo && exitGeo.lat != null){
+    s += '<circle class="dot exit" cx="'+projX(exitGeo.lon).toFixed(1)+'" cy="'+
+         projY(exitGeo.lat).toFixed(1)+'" r="5.5"><title>'+
+         esc('本机出口 '+exitGeo.ip+' '+(exitGeo.city||'')+' '+
+             (exitGeo.country||''))+'</title></circle>';
+  }
+  document.getElementById('mapDots').innerHTML = s;
+}
+
+function renderFingerprint(f){
+  const box = document.getElementById('fpList');
+  if (!f || !f.items){ box.textContent = '—'; return; }
+  const tag = {exposed:'正在暴露', blocked:'已封堵', lan_only:'局域网可见',
+               risk:'有外发风险'};
+  box.innerHTML = f.items.map(i =>
+    '<div class="fpitem"><span class="fptag '+i.status+'">'+
+    (tag[i.status]||i.status)+'</span><span class="fpval"><span class="k">'+
+    esc(i.kind)+'</span> <span class="v">'+esc(i.value)+'</span>'+
+    '<div class="h">'+esc(i.how||'')+'</div></span></div>').join('');
+  const v = document.getElementById('fpVerdict');
+  if (v){
+    v.textContent = f.verdict ? '· ' + f.verdict : '';
+    v.style.color = (f.counts && f.counts.exposed) ? 'var(--bad)' : 'var(--ok)';
+  }
+}
+
+function renderExit(s){
+  const box = document.getElementById('exitBox');
+  const eg = (s.egress && s.egress.default) || null;
+  const parts = [];
+  if (eg){
+    parts.push('<div style="font-size:16px;color:var(--fg);'+
+      'font-family:ui-monospace,Consolas,monospace">'+esc(eg.ip||'—')+'</div>');
+    parts.push('<div style="margin-top:3px">'+
+      esc([eg.country, eg.city, eg.isp].filter(Boolean).join(' · ')||'—')+'</div>');
+  } else parts.push('<div>出口未探测</div>');
+  const tun = (s.tunnels||[])[0];
+  parts.push('<div style="margin-top:7px;padding-top:6px;border-top:1px dashed '+
+    '#20272f;color:var(--fg3)">隧道：'+
+    (tun ? esc(tun.alias+'  '+((tun.ipv4||[])[0]||'')) : '不在线')+'</div>');
+  box.innerHTML = parts.join('');
+  return eg;
+}
+
+function renderTimeline(tl){
+  const box = document.getElementById('timeline');
+  if (!tl || !tl.series || !tl.series.length){
+    box.innerHTML = '<div style="color:var(--fg3);font-size:12px">'+
+      '还没有足够样本，几秒后自动刷新</div>';
+    return;
+  }
+  const max = Math.max(1, ...tl.series.map(s => Math.max(...s.cells)));
+  let h = '';
+  for (const s of tl.series){
+    h += '<div class="tlrow"><div class="tlname" title="'+esc(s.name)+'">'+
+         esc(s.name)+'</div><div class="tlcells">';
+    for (let i = 0; i < s.cells.length; i++){
+      const v = s.cells[i];
+      let st = '';
+      if (v > 0){
+        const a = Math.min(1, 0.22 + 0.78 * (v / max));
+        st = 'background:rgba(' + (s.leaked[i] ? '248,81,73,' : '88,166,255,') +
+             a.toFixed(2) + ')';
+      }
+      h += '<div class="tlcell" style="'+st+'"></div>';
+    }
+    h += '</div></div>';
+  }
+  h += '<div class="tlaxis"><div></div><div class="r">'+
+       '<span>5 分钟前</span><span>现在</span></div></div>';
+  box.innerHTML = h;
+  const note = document.getElementById('tlNote');
+  if (note) note.textContent = '最近 5 分钟 · ' + tl.series.length +
+    ' 个活跃程序 · 泳道深浅 = 网络活动度（不是字节数）';
+}
+
+function renderProcs(t){
+  const box = document.getElementById('procList');
+  const ps = t.processes || [];
+  if (!ps.length){
+    box.innerHTML = '<div style="color:var(--fg3);font-size:12px">暂无活动</div>';
+    return;
+  }
+  const maxAct = Math.max(1, ...ps.map(p => p.activity));
+  let h = '';
+  for (const p of ps){
+    const open = PROC_OPEN[p.name] ? ' open' : '';
+    const badge = p.leaked > 0
+      ? '<span class="procbad">'+p.leaked+' 条绕过隧道</span>'
+      : (p.kernel_held > 0
+          ? '<span class="procok">内核持有 '+p.kernel_held+'</span>'
+          : '<span class="procok">走隧道</span>');
+    h += '<div class="proc'+open+'" data-name="'+esc(p.name)+'">'+
+      '<div class="prochead" onclick="toggleProc(this)">'+
+      '<span class="nm">'+esc(p.name)+'</span>'+badge+
+      '<span class="st">活跃 '+p.live+' · 新建 '+p.new+' · 目的地 '+p.dest_count+
+      (p.udp ? (' · UDP '+p.udp) : '')+'</span>'+
+      '<span class="bar'+(p.leaked?' leak':'')+'"><i style="width:'+
+      (100*p.activity/maxAct).toFixed(0)+'%"></i></span>'+
+      '</div><div class="procdest">';
+    if (!p.destinations.length)
+      h += '<div class="destline"><span class="geo">（没有可见的目的地）</span></div>';
+    for (const d of p.destinations){
+      const geo = d.local ? esc(d.country)
+        : (d.pending ? '<i style="color:var(--fg3)">解析中…</i>'
+           : '<b>'+esc([d.city,d.country].filter(Boolean).join(' ')||'未知')+'</b>'+
+             (d.isp ? ' <span style="color:var(--fg3)">'+esc(d.isp)+'</span>' : ''));
+      h += '<div class="destline"><span class="ip">'+esc(d.ip)+'</span>'+
+           '<span class="geo">'+geo+'</span></div>';
+    }
+    if (p.dest_count > p.destinations.length)
+      h += '<div class="destline"><span class="geo">… 还有 '+
+           (p.dest_count - p.destinations.length)+' 个目的地</span></div>';
+    h += '</div></div>';
+  }
+  box.innerHTML = h;
+  const mn = document.getElementById('metricNote');
+  if (mn) mn.textContent = t.metric_note || '';
+}
+
+function toggleProc(el){
+  const card = el.parentElement;
+  card.classList.toggle('open');
+  PROC_OPEN[card.dataset.name] = card.classList.contains('open');
+}
+
+async function tickTraffic(){
+  try {
+    const [t, tl] = await Promise.all([
+      api('traffic?top=40'),
+      api('timeline?seconds=300&buckets=150')
+    ]);
+    if (t && !t.error){
+      LAST_TRAFFIC = t;
+      document.getElementById('rateDown').textContent = t.total.in_h;
+      document.getElementById('rateUp').textContent = t.total.out_h;
+      document.getElementById('tgConn').textContent =
+        t.connection_count + ' 条连接 · ' + t.process_count + ' 个程序' +
+        (t.leaked_connections ? ' · ' + t.leaked_connections + ' 条绕过隧道' : '');
+      renderProcs(t);
+      const eg = LAST_STATUS ? renderExit(LAST_STATUS) : null;
+      const exitGeo = await ensureExitGeo(eg);
+      await loadWorld();
+      renderMap(t, exitGeo);
+    }
+    if (tl && !tl.error) renderTimeline(tl);
+  } catch(e){ /* 守护重启时会短暂失败，静默重试 */ }
+}
+
+async function tickFingerprint(){
+  try {
+    const f = await api('fingerprint');
+    if (f && !f.error) renderFingerprint(f);
+  } catch(e){}
+}
+
+setTimeout(function(){
+  drawGraticule();
+  tickTraffic(); tickFingerprint();
+  setInterval(tickTraffic, 2000);
+  setInterval(tickFingerprint, 8000);
+}, 300);
+
 </script>
 </body>
 </html>

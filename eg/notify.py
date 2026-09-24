@@ -265,6 +265,48 @@ class Notifier:
                         reason=f.detail, extra={"channels": results})
         return results
 
+    def write_notice_now(self, f, action_text: str) -> str:
+        """**同步**写一份通知记录（notices/pid_N.json + 事件落盘）。
+
+        和 notify() 的区别：只做最便宜的两件事（写两个小文件），
+        不碰控制台注入 / 弹窗 / 事件日志 / Toast 这些要起子进程的通道。
+        这样即使动作队列被挤满，`/api/why?pid=N` 也一定能查到原因。
+
+        返回写出的路径（空串表示没写）。
+        """
+        try:
+            label = (f.process or ("本机网络配置" if f.pid <= 0
+                                   else f"PID {f.pid}"))
+            title, body = self.compose(f, action_text, label)
+            selftest = bool(self.cfg.get("selftest_mode")) or \
+                bool(f.evidence.get("selftest"))
+            if selftest:
+                title = "【自测流量，不是真实泄漏】" + title
+                body = ("⚠ 这是 EgressGuard 自己的验收测试制造的流量，"
+                        "不是真实泄漏。\n" + body)
+            rec = {
+                "ts": time.time(), "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "code": f.code, "title": title, "body": body,
+                "pid": f.pid,
+                "process": f.process or ("本机网络配置" if f.pid <= 0 else ""),
+                "exe": f.exe, "severity": f.severity, "detail": f.detail,
+                "local": f.local, "remote": f.remote, "proto": f.proto,
+                "iface": f.iface, "evidence": f.evidence,
+                "action": action_text, "system_level": f.pid <= 0,
+                "selftest": selftest,
+            }
+            (DATA_DIR / "notices").mkdir(parents=True, exist_ok=True)
+            p = DATA_DIR / "notices" / f"pid_{rec['pid']}.json"
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            os.replace(tmp, p)
+            with self._lock:
+                self._last_violation = rec
+            return str(p)
+        except Exception:
+            return ""
+
     # ---- 通道实现 -----------------------------------------------------
 
     def _write_files(self, rec: dict) -> None:

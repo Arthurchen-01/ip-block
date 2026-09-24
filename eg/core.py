@@ -43,9 +43,12 @@ from .config import Config, ensure_dirs, DATA_DIR
 #   全都静默失效**，看起来像"功能正常"。
 #   这和验收脚本里漏 `from eg import netinfo as NI` 是同一类错误。
 from .enforce import Enforcer, _run_ps
+from .geo import GeoCache
+from .traffic import TrafficMonitor
 from .logbus import LogBus
 from .notify import Notifier
 from .policy import Code, Finding, PolicyEngine, SEV_RANK
+from .paths import resource
 
 START_TS = time.time()
 
@@ -94,8 +97,14 @@ class GuardCore:
                           "dropped_actions": 0, "blocked_targets": 0}
         # 隔离 + 通知的工作队列。热循环只管往里放，绝不等它。
         self._action_q: queue.Queue = queue.Queue(maxsize=500)
+        # 流量监督台：地理缓存 + 流量采样器
+        self.geo = GeoCache(DATA_DIR)
+        self.traffic = TrafficMonitor(cfg, self.policy, self.geo)
         # 状态型判定的"上一轮内容"快照，用于只在变化时发事件
         self._state_snapshot: dict[tuple, str] = {}
+        # 动作队列的去重键（(pid, code)），防止同一进程反复泄漏把队列灌满
+        self._queued_keys: set[tuple] = set()
+        self._dedup_actions = 0
         # 自动修复的冷却：key -> 上次修复时间。防抖，避免每轮都去改系统配置。
         self._remediated: dict[str, float] = {}
         self._state_seen_round: set[tuple] = set()
@@ -307,6 +316,25 @@ class GuardCore:
             #   实测现象：一条只活了 1 秒的 ESTAB 泄漏连接被漏掉，
             #   守护只在它退化成 CLOSE_WAIT 之后才抓到。
             #   现在热循环只负责"发现 + 掐断"，慢活全部异步化。
+            # ⚠ 通知落盘**同步写**，不进队列。
+            #
+            # 为什么：动作队列是给"重活"用的（起 PowerShell 改防火墙、
+            # 注入控制台、弹窗、写事件日志），这些各自带 10~25 秒超时。
+            # 实测踩到过：机器上有个程序在持续泄漏（Clash 绕过隧道，100+ 条连接），
+            # 守护不停掐它，动作队列被灌满，结果**验收靶子的通知被挤掉了** ——
+            # 靶子确实被掐断了（事件流里有判定），但 /api/why 查不到原因、
+            # 桌面也没有原因卡。对一个"要告诉程序为什么被掐"的工具来说，
+            # 这是核心功能失效。
+            #
+            # 落盘只要 1ms 左右，同步做完全不影响热循环（热循环的契约是
+            # 不做"秒级"操作，不是不做任何 IO）。
+            try:
+                self.notifier.write_notice_now(f, act)
+            except Exception as e:
+                self.bus.error(severity="low", code="NOTICE",
+                               title="通知落盘失败（不影响掐断）",
+                               detail=f"{type(e).__name__}: {e}")
+
             if act != "notify_only":
                 self._enqueue_action(f, act, steps)
 
@@ -322,7 +350,19 @@ class GuardCore:
         return (f.code, f.iface, ev.get("if_index"), v6)
 
     def _enqueue_action(self, f: Finding, act: str, steps: list[str]) -> None:
-        """把隔离与通知排进工作队列。队列满了就丢弃并记一条错误，绝不阻塞热循环。"""
+        """把隔离与通知排进工作队列。队列满了就丢弃并记一条错误，绝不阻塞热循环。
+
+        入队前按 (pid, code) 去重：同一个进程的同一类问题在队列里只保留一条。
+        没有去重的话，一个持续泄漏的程序（实测 Clash 有 100+ 条连接）
+        会把 500 容量的队列瞬间灌满，其它程序的处置全被挤掉。
+        """
+        key = (f.pid, str(f.code))
+        with self._lock:
+            if key in self._queued_keys:
+                self._dedup_actions = getattr(self, "_dedup_actions", 0) + 1
+                return
+            self._queued_keys.add(key)
+
         try:
             self._action_q.put_nowait((f, act, list(steps)))
         except Exception:
@@ -342,6 +382,13 @@ class GuardCore:
             if item is None:
                 break
             f, act, steps = item
+            # 释放去重 key：这个 (pid, code) 之后还能再入队。
+            # 不释放的话，一个程序被处理过一次就再也进不了队列了。
+            try:
+                with self._lock:
+                    self._queued_keys.discard((f.pid, str(f.code)))
+            except Exception:
+                pass
             try:
                 if act in ("block_new", "block_and_kill", "block_kill_proc"):
                     target = f.exe or ""
@@ -908,6 +955,145 @@ class GuardCore:
                         paths.append(p)
         return list(dict.fromkeys(paths))
 
+    def _traffic_loop(self) -> None:
+        """流量采样循环。
+
+        ⚠ 必须是独立线程，不能挂在热循环上。
+        热循环的契约是"只做连接枚举 + 判定 + 处置，绝不慢操作"，
+        而这里要做两件慢事：
+          1. GetIfEntry2 遍历所有接口取字节计数
+          2. 地理查询要发 HTTP 请求（虽然限流，但仍是网络 I/O）
+        挂在热循环上会把判定节奏从 250ms 拖到秒级，
+        快泄漏就会在那个窗口里溜掉 —— 这个坑已经踩过一次。
+        """
+        while not self._stop.is_set():
+            t0 = time.monotonic()
+            try:
+                self.traffic.sample(self._adapters)
+            except Exception as e:
+                self.bus.error(severity="low", code="TRAFFIC",
+                               title="流量采样失败（不影响判定与拦截）",
+                               detail=f"{type(e).__name__}: {e}")
+            elapsed = time.monotonic() - t0
+            self._stop.wait(max(0.2, self.traffic.tick_s - elapsed))
+
+    def _ipv6_blocked(self) -> bool:
+        """IPv6 封堵规则在不在生效。"""
+        try:
+            for r in self._firewall_cached():
+                nm = str(r.get("DisplayName") or r.get("Name") or "")
+                act = str(r.get("Action"))
+                if "IPv6" in nm and act in ("Block", "4") \
+                        and r.get("Enabled") in (True, "True"):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def fingerprint_report(self) -> dict:
+        """对外暴露的本机指纹 —— 逐项标明状态。
+
+        为什么分状态而不是一律标红：
+          - 主机名/用户名：局域网内可被 NetBIOS/mDNS/LLMNR 探测，**能被封**
+          - 网卡 MAC：只在二层可见（网关与同网段看得到）。远程服务器看不到，
+            封不掉也不该封 —— 一律标红只会让人以为处处是漏洞
+          - MachineGuid / 主板UUID：系统不主动外发，但读到它的软件能送出去。
+            属于"有外发风险"，不是"正在泄漏"
+        把这三类混为一谈，界面就没有信息量了。
+        """
+        from .policy import collect_fingerprint_needles
+        try:
+            needles = collect_fingerprint_needles()
+        except Exception:
+            needles = []
+
+        fp_blocked = False
+        try:
+            for r in self._firewall_cached():
+                nm = str(r.get("DisplayName") or r.get("Name") or "")
+                if "指纹" in nm and str(r.get("Action")) in ("Block", "4") \
+                        and r.get("Enabled") in (True, "True"):
+                    fp_blocked = True
+                    break
+        except Exception:
+            pass
+
+        v6_blocked = self._ipv6_blocked()
+        tun_dns = {d for t in self._adapters if t.is_tunnel for d in t.dns}
+        net_extra = []
+        for a in self._adapters:
+            if a.is_tunnel or not a.is_up:
+                continue
+            for ip in a.ipv6_global:
+                net_extra.append({
+                    "kind": "公网 IPv6", "value": ip,
+                    "status": "blocked" if v6_blocked else "exposed",
+                    "why": "隧道只承载 IPv4，公网 IPv6 是完整的旁路通道",
+                    "how": ("已被规则封杀 2000::/3（地址还在，但出不去）"
+                            if v6_blocked else
+                            "未封堵 —— 这些流量能直接出去"),
+                })
+            bad = [d for d in a.dns if d not in tun_dns]
+            if bad:
+                net_extra.append({
+                    "kind": "DNS 服务器", "value": ", ".join(bad),
+                    "status": "exposed",
+                    "why": f"{a.alias} 用的是隧道外的 DNS，查询会暴露给运营商",
+                    "how": "打开闸门后会自动改指隧道 DNS",
+                })
+
+        items = []
+        for n in needles:
+            kind = n.get("kind", "")
+            if kind in ("主机名", "用户名"):
+                items.append({
+                    "kind": kind, "value": n.get("value", ""),
+                    "status": "blocked" if fp_blocked else "exposed",
+                    "why": n.get("why", ""),
+                    "how": ("指纹信道（NetBIOS/mDNS/LLMNR 端口）已被防火墙封堵"
+                            if fp_blocked else
+                            "指纹信道未封堵 —— 同局域网内可被探测"),
+                })
+            elif kind == "网卡MAC":
+                items.append({
+                    "kind": kind, "value": n.get("value", ""),
+                    "status": "lan_only", "why": n.get("why", ""),
+                    "how": "MAC 只在二层可见（网关与同网段能看到）。"
+                           "远程服务器看不到，封不掉也不该封。",
+                })
+            elif kind in ("MachineGuid", "主板UUID"):
+                items.append({
+                    "kind": kind, "value": n.get("value", ""),
+                    "status": "risk", "why": n.get("why", ""),
+                    "how": "系统不会主动外发，但任何读到它的软件都能送出去。",
+                })
+            else:
+                items.append({
+                    "kind": kind, "value": n.get("value", ""),
+                    "status": "risk", "why": n.get("why", ""),
+                    "how": "需要看具体软件是否读取并外发",
+                })
+        items.extend(net_extra)
+
+        n_exposed = sum(1 for i in items if i["status"] == "exposed")
+        return {
+            "ts": time.time(),
+            "items": items,
+            "counts": {
+                "total": len(items),
+                "blocked": sum(1 for i in items if i["status"] == "blocked"),
+                "exposed": n_exposed,
+                "lan_only": sum(1 for i in items if i["status"] == "lan_only"),
+                "risk": sum(1 for i in items if i["status"] == "risk"),
+            },
+            "verdict": (f"{n_exposed} 项正在暴露" if n_exposed
+                        else "没有正在暴露的指纹项"),
+            "note": "「正在暴露」= 现在就能被对端拿到；"
+                    "「局域网可见」= 只有同网段/网关看得到；"
+                    "「有外发风险」= 系统不主动发，但软件可以。",
+        }
+
+
     def _hot_loop(self) -> None:
         """热循环：只做连接枚举 + 判定 + 处置。**绝不在这里做慢操作。**
 
@@ -1014,7 +1200,11 @@ class GuardCore:
                         # 这样页面和 API 同源，不需要处理 CORS 与 file:// 的各种坑。
                         # 用 paths.resource()：冻结后 ui.html 在解包目录里，
                         # 源码运行时在 eg/ 目录里，两种情况都能找到。
-                        from .paths import resource
+                        # ⚠ 这里**不能**再写 `from .paths import resource`。
+                        #   函数内任何位置对 resource 赋值/导入，都会让它在
+                        #   **整个函数**里变成局部名 —— 于是上面 /assets/ 路由
+                        #   里那一次 resource(...) 会抛 UnboundLocalError。
+                        #   模块顶部已经导入过，直接用即可。
                         html = resource("eg/ui.html").read_bytes()
                         self.send_response(200)
                         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1067,6 +1257,57 @@ class GuardCore:
                                         "本机指纹从本机泄漏。该连接满足泄漏条件，"
                                         "已被主动切断。"),
                         })
+
+                    # 静态资源（世界地图数据、图标）。
+                    # 地图数据 26KB，内联进 ui.html 会让它变得笨重，
+                    # 而且每次改地图都要重新打包 —— 单独走一个路由更干净。
+                    if path.startswith("/assets/"):
+                        name = path[len("/assets/"):].strip("/")
+                        # 只允许 assets 目录下的单层文件名，防目录穿越
+                        if name and "/" not in name and "\\" not in name \
+                                and ".." not in name:
+                            ap = resource("assets", name)
+                            if ap.exists() and ap.is_file():
+                                body = ap.read_bytes()
+                                ctype = ("text/javascript; charset=utf-8"
+                                         if name.endswith(".js") else
+                                         "image/x-icon" if name.endswith(".ico")
+                                         else "image/png" if name.endswith(".png")
+                                         else "application/octet-stream")
+                                self.send_response(200)
+                                self.send_header("Content-Type", ctype)
+                                self.send_header("Content-Length", str(len(body)))
+                                self.send_header("Cache-Control", "max-age=3600")
+                                self.end_headers()
+                                self.wfile.write(body)
+                                return
+                        self.send_response(404)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+
+                    # ---- 流量监督台 ----
+                    if path == "/api/traffic":
+                        top = int((q.get("top", ["40"])[0] or "40"))
+                        return self._send(200, core.traffic.snapshot(top=top))
+
+                    if path == "/api/timeline":
+                        sec = int((q.get("seconds", ["300"])[0] or "300"))
+                        bk = int((q.get("buckets", ["120"])[0] or "120"))
+                        return self._send(200, core.traffic.timeline(
+                            seconds=sec, buckets=bk))
+
+                    # 单点地理查询（界面用它拿出口坐标在地图上打点）。
+                    # 走的是和流量视图同一个 GeoCache —— 出口 IP 通常在
+                    # 目的地列表里出现过，所以这里基本都命中缓存，不额外耗配额。
+                    if path == "/api/geo":
+                        ip = (q.get("ip", [""])[0] or "").strip()
+                        if not ip:
+                            return self._send(400, {"error": "缺少 ip 参数"})
+                        return self._send(200, core.geo.lookup(ip))
+
+                    if path == "/api/fingerprint":
+                        return self._send(200, core.fingerprint_report())
 
                     # 零泄漏自检（托盘和集成方都用这个）
                     if path == "/api/zero_leak":
@@ -1330,6 +1571,9 @@ class GuardCore:
         threading.Thread(target=self._adapter_loop, daemon=True,
                          name="eg-adapter").start()
         threading.Thread(target=self._hot_loop, daemon=True, name="eg-hot").start()
+        # 流量采样独立线程（地理查询是网络 I/O，不能挂热循环）
+        threading.Thread(target=self._traffic_loop, daemon=True,
+                         name="eg-traffic").start()
         threading.Thread(target=self._slow_loop, daemon=True, name="eg-slow").start()
         threading.Thread(target=self._action_loop, daemon=True,
                          name="eg-action").start()

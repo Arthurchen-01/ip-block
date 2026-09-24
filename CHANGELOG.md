@@ -1,9 +1,147 @@
 # 变更记录
 
+## [1.3.0] - 2026-09-24
+
+> 版本跨度：`v1.2.0` → `v1.3.0`（基线 tag `v1.2.0` / 提交 `9c29984`）
+> 代码量：`17 个文件，+2153 / −3 行`（`git diff --stat v1.2.0`）
+> 本版主题：**加一个「流量可视监督台」** —— 让用户一眼看到当前流量在发生什么：
+> 谁在控制流量、去了哪个 IP 位置、出去的本机指纹是什么。
+> 做成 ManicTime 那种有时间线画面感的界面，而不是一堆表格。
+
+### 上一版（v1.2.0）的代码状态 —— 改之前是什么样
+
+v1.2.0 在**判定与拦截**上已经完整（零泄漏自检、自动修复、托盘、140 项验收），
+但它**只有一个"判定/拦截"的视角，没有"当前发生了什么"的视角**：
+
+| 文件 / 形态 | v1.2.0 时的状态 |
+| :--- | :--- |
+| 整个仪表盘 | **只有表格和数字**。要看"现在谁在传数据"，得自己在连接表里按 pid 数条数。没有速率、没有地图、没有时间线、没有画面感。 |
+| 速率 | **完全没有**。不知道现在有没有在传、传多快、走的是隧道还是物理网卡。 |
+| 目的地 | 连接表里有 IP 字符串，但**没有地理信息** —— 看不出"这个连接去了哪个国家/城市"。 |
+| 指纹 | 只在 `status.policy.needles` 里给一个数量（"已监控 6 项"），**看不出哪一项正在暴露、哪一项已经封堵**。 |
+| `eg/traffic.py` / `eg/geo.py` | **不存在**。 |
+| 时间线 | **没有**。没有任何"什么时候谁在活动"的记录。 |
+| 世界地图 | **没有**。 |
+
+### 本次改动的文件 —— 改了什么
+
+| 文件 | 类型 | 改动行数 | 改了什么 |
+| :--- | :--- | ---: | :--- |
+| `eg/traffic.py` | **新** | 443 | 流量采样器：`GetIfEntry2` 取 64 位网卡字节计数（**去重掉 QoS/WFP/Filter 驱动层的重复计数**）→ 真实上/下行速率；连接表采样 → 每进程活跃连接/新建速率/目的地集合；环形缓冲 → 可回溯 15 分钟的时间线 |
+| `eg/geo.py` | **新** | 214 | 地理缓存：内存 + 落盘（`geo_cache.json`）、**限流（每 20 秒最多 12 个）**、内网/保留段直接给中文标签不查、失败条目短 TTL。实测证明不限流会在几秒内打爆 ip-api 的 45/分钟配额，表现为"地图上一个点都没有" |
+| `eg/ui.html` | 改 | +385 | 流量监督台：世界地图（SVG + 离线陆地轮廓）、指纹面板、ManicTime 风格时间线泳道、按进程分组的可展开目的地列表、实时速率 |
+| `eg/core.py` | 改 | +248 | 新增 `/api/traffic`、`/api/timeline`、`/api/fingerprint`、`/api/geo`、`/assets/<file>` 路由；`_traffic_loop` 独立线程（**地理查询是网络 I/O，绝不能挂热循环**）；`fingerprint_report()` 把指纹按暴露程度分四类；**通知落盘改成同步写**（见 Fixed #1） |
+| `eg/notify.py` | 改 | +42 | 新增 `write_notice_now()`：只做最便宜的两件事（写 notices/pid_N.json + 事件落盘），不碰控制台注入/弹窗/事件日志/Toast 那些要起子进程的通道 |
+| `tools/make_worldmap.py` | **新** | 113 | 把 Natural Earth 的 135 KB 陆地 GeoJSON 压成 26 KB 的内嵌数据（坐标取整到 0.1° + 丢小岛 + 差分编码） |
+| `assets/world_land.js` | **新** | — | 压缩后的世界陆地轮廓（121 个多边形，4911 个点，26 KB） |
+| `assets/screenshot-dashboard.png` | **新** | — | 界面截图（564 KB），给 README 和发布说明用 |
+| `tests/acceptance_exe.py` | 改 | +126 | 新增 `e9_traffic_dashboard()`：17 项检查覆盖流量接口、去重、活动度标注、时间线、指纹分状态、地理查询、地图数据、页面 DOM 容器 |
+| `tests/exp_*.py` | **新** | 693 | 五个可行性实验（见下方"排查记录"） |
+| `VERSION` | 改 | 2 | `1.2.0` → `1.3.0` |
+
+### Added
+
+- **实时速率（真字节数）**：网卡级 64 位计数器，上/下行分别显示。
+- **世界地图**：目的地地理分布，红点=绕过隧道、蓝点=走隧道、灰点=内网、绿点=本机出口。
+  陆地轮廓**离线内嵌**（26 KB），不依赖任何外部地图服务。
+- **指纹面板**：主机名/用户名/MAC/MachineGuid/主板UUID/公网IPv6/DNS 服务器逐项列出，
+  每项标明状态与"怎么处理"。
+- **时间线**：ManicTime 风格 —— 横轴时间、每个程序一条泳道、有活动时着色、
+  **绕过隧道的格子标红**，可回溯最近 5 分钟（内部保留 15 分钟）。
+- **谁在控制流量**：按进程分组，点开看目的地（带地理）、活跃连接数、新建速率。
+- **`/api/geo`**：单点地理查询，界面用它给出口打点。
+
+### Changed
+
+- **指纹不再一律标红**，分四类：
+  `正在暴露`（现在就能被对端拿到）/ `已封堵` / `局域网可见`（只有同网段看得到，封不掉也不该封）
+  / `有外发风险`（系统不主动发，但软件可以）。混为一谈的话界面就没有信息量了。
+- **网卡速率去重**：Windows 上同一张物理网卡挂着 QoS Packet Scheduler、WFP Native MAC、
+  Virtual WiFi Filter 等好几层，`GetIfEntry2` 对**每一层**都返回一份**完全相同**的计数。
+  实测 45 个接口里有 40 个是这种重复 —— 不过滤的话界面上列 40 多行一样的速率，
+  还把它们的和当总流量，数字虚高好几倍。
+- **内核持有的连接单独统计**：PID 0/4 名下有 1000+ 条从物理网卡出去的连接
+  （隧道客户端的外层传输、系统 DNS 等由内核代持）。它们**无法归属**，所以：
+  算成"泄漏"→ 数字巨大且无从处置；完全不显示 → 用户不知道有这些东西。
+  单独一栏，说清楚"看不到归属"。
+
+### Fixed
+
+| # | 问题 | 后果 |
+| ---: | :--- | :--- |
+| 1 | 通知落盘在动作队列里，队列被洪水挤满时会被丢弃 | 实测：机器上 Clash 持续泄漏（100+ 条连接），守护不停掐它，动作队列灌满，**验收靶子的通知被挤掉** —— 靶子确实被掐断了（事件流有判定），但 `/api/why` 查不到原因、桌面也没有原因卡。对一个"要告诉程序为什么被掐"的工具来说这是核心功能失效。改成**同步落盘**（约 1ms），重通道仍留队列 |
+| 2 | 动作队列没有去重 | 一个持续泄漏的程序能把 500 容量的队列瞬间灌满，其它程序的处置全被挤掉。改成按 `(pid, code)` 去重 |
+| 3 | `selftest_mode` 被验收打开后没关 | 之后**所有真实泄漏**的通知都被标成「【自测流量，不是真实泄漏】」—— 用户看到真实泄漏却以为是测试噪音，比不通知还糟。验收退出时复位 |
+| 4 | `do_GET` 里有局部的 `from .paths import resource` | Python 会把 `resource` 当成**整个函数的局部名**，于是 `/assets/` 路由里那次调用抛 `UnboundLocalError` |
+| 5 | `write_notice_now` 覆盖了 `self._last` | `_last` 是 `(code,pid)→时间戳` 的**去重字典**，覆盖它会彻底搞坏通知去重。应设 `_last_violation` |
+| 6 | `acceptance_exe.py` 缺 `import urllib.request` | E9 的 6 项检查全报 `NameError`（存在性检查被文件里已有的 `urllib.request.urlopen` 调用骗过） |
+
+### 排查记录：三条拿不到数据的路，和一条走通的
+
+要画"谁在吃带宽"，得先知道**每个进程用了多少字节**。试了三条路：
+
+| 方法 | 结果 |
+| :--- | :--- |
+| `GetPerTcpConnectionEStats`（每条连接的字节数） | ❌ 本机返回 **1784**（`ERROR_INVALID_USER_BUFFER`）。这个 API 属于可选特性，很多系统上根本没实现 |
+| **ETW**（`Microsoft-Windows-Kernel-Network`） | ⚠️ **技术上可行**：`logman` 采集 + `tracerpt` 转 CSV 能拿到 PID + 字节数（实测 8 秒采到 3716 条事件）。但 **10 秒产生 5.6 MB CSV，即 33 MB/分钟** —— 做一次性分析可以，做常驻监控太重 |
+| 逐连接字节数 | ❌ Windows 不通过任何用户态 API 暴露 |
+
+**走通的那条**：`GetIfEntry2` 的网卡级 64 位计数器 —— 给出**真实的总速率**。
+每进程那一栏用**连接活动度**（活跃连接数 + 新建速率）代替，
+并在接口和界面上**明确标注"这是活动度，不是字节数"**，不假装是流量。
+
+### 另一个查了很久的假象：6 个残留守护进程
+
+改完 `/assets/` 路由后一直报 `UnboundLocalError: cannot access local variable 'resource'`，
+但 AST 分析显示代码完全正确（模块级有导入、`do_GET` 内无绑定）。
+
+最后发现：**有 6 个守护进程同时在跑，端口被一个跑着旧代码的老进程占着**。
+而我的"杀掉所有守护"命令**一个都没杀掉** —— 因为
+`Get-Process` 返回的对象**没有 `CommandLine` 属性**，
+`Where-Object { $_.CommandLine -like '*eg.core*' }` 永远为假。
+换成 `Get-CimInstance Win32_Process` 才杀掉。
+
+### Verified
+
+```
+源码形态：93 / 93 通过，0 未通过
+exe 形态：64 / 64 通过，0 未通过
+────────────────────────────────
+总计：   157 / 157 通过，0 未通过
+```
+
+v1.3.0 新增的 E9 共 17 项，全部通过（节选）：
+
+```
+[PASS] GET /api/traffic 可用 — ↓23.3 KB/s ↑13.5 KB/s
+[PASS] 网卡速率已去重（只剩真实网卡，不是 40 多个过滤驱动层） — 2 张：iKuuuVPN, WLAN 3
+[PASS] 按进程给出了活动度视图 — 18 个进程，首个=verge-mihomo.exe
+[PASS] 接口明确标注了「活动度不是字节数」（不假装）
+[PASS] 内核持有的连接单独统计，不混进泄漏数 — 裸奔=7 内核持有=1185
+[PASS] GET /api/timeline 可用 — 24 条泳道 / 40 个桶
+[PASS] 时间线泳道带泄漏标记（能看出哪条是红的）
+[PASS] 指纹按暴露程度分了状态（不是一律标红） — 状态集合=exposed,lan_only,risk
+[PASS] 世界地图数据可取（离线内嵌，不依赖外部地图服务） — 26 KB，含 122 组坐标
+[PASS] 页面含「世界地图」/「指纹面板」/「时间线」/「谁在控制流量」容器
+```
+
+界面实测（Playwright 真实浏览器，控制台零报错）：
+
+| 组件 | 渲染结果 |
+| :--- | :--- |
+| 实时速率 | ↓1.88 MB/s ↑311.6 KB/s |
+| 世界地图 | 世界轮廓（57,445 字符路径）+ 25 个目的地圆点（6 个红色）+ 出口绿点 |
+| 指纹面板 | 8 项，"· 4 项正在暴露" |
+| 出口 | `103.151.173.212 / Japan · Tokyo · IKUUU NETWORK LTD` |
+| 时间线 | 23 条泳道 / 3450 格，1247 格着色（27 格红色=绕过隧道） |
+| 谁在控制流量 | 19 个进程，首个 `verge-mihomo.exe — 79 条绕过隧道`，展开显示带地理的目的地 |
+
+---
+
 ## [1.2.0] - 2026-09-24
 
 > 版本跨度：`v1.1.0` → `v1.2.0`（基线提交 `5c60e02` / 上一个 tag `v1.1.0`）
-> 代码量：`39 个文件，11300+ 行`（新增 `eg/tray.py`、`tools/make_icon.py`、`assets/`）
+> 代码量：`15 个文件，+1109 / −31 行`
 > 本版主题：**从"能跑的脚本"变成"像一个软件"** —— 应用图标、系统托盘、打包自诊断、
 > 无控制台环境下的文件日志。同时修掉 4 个只在打包形态才暴露的 bug。
 
@@ -24,18 +162,15 @@ v1.1.0 在**功能**上是完整的（零泄漏自检 + 自动修复 + 119 项�
 
 ### 本次改动的文件 —— 改了什么
 
-| 文件 | 类型 | 改动 |
-| :--- | :--- | :--- |
-| `eg/tray.py` | **新** | 系统托盘：三态图标（绿=零泄漏 / 红=有泄漏 / 黄=闸门未启用）、悬停结论、右键菜单（打开仪表盘 / 零泄漏自检 / 开关闸门 / 打开数据目录 / 打开事件日志 / 退出）、泄漏气泡通知。用 win32gui 直接调 `Shell_NotifyIconW`，**不引入 pystray**。带逐步日志（`_log()`）—— 因为 windowed exe 没有控制台，托盘又在独立线程里，出问题本来完全没线索。 |
-| `tools/make_icon.py` | **新** | 用 Pillow 画多尺寸 `.ico`（10 种尺寸）。图形语义：盾牌 + 被掐断的连接 + 右下角小锁。仓库自洽，不含二进制美术文件。 |
-| `assets/egressguard.ico` | **新** | 应用图标（40 KB，10 种尺寸） |
-| `assets/icon_ok.png` / `icon_leak.png` | **新** | 托盘与文档用的两种状态图 |
-| `eg/dashboard.py` | 改 | 新增 `_setup_logging()`：把 stdout/stderr 落到 `logs/dashboard.log`（2MB 轮转）。**windowed exe 必须有这个**，否则打包后出问题什么都看不到。托盘接进 `run_window()`：`on_open_dashboard` 恢复并置顶已有窗口、`on_exit` 真正结束进程。新增 `--no-tray`。 |
-| `eg/core.py` | 改 | 新增 `diagnostics()` 与 `--diag`：一次说清冻结环境下哪些模块/资源可用（win32gui / PIL / webview / pythoncom / 图标 / VERSION）。新增 `/api/zero_leak` 端点（托盘和集成方共用）。 |
-| `eg/paths.py` | 改 | `resource()` 改**变参**：`resource("eg/ui.html")` 和 `resource("assets", "x.ico")` 都行。 |
-| `tools/build_exe.py` | 改 | `version_info.txt` 移到系统临时目录（`--clean` 碰不到）；加 `--icon`、`--add-data assets`、`--version-file`；补 `win32gui/win32api/win32con` 的 hidden-import。 |
-| `tests/acceptance_exe.py` | 改 | 新增 `e8_tray_and_icon()`：查图标文件、查 exe 版本资源与 `VERSION` 一致、跑 `--diag` 查冻结依赖、**用 `IsWindow` 校验托盘窗口真的存在**、查托盘状态轮询活着。 |
-| `VERSION` | 改 | `1.1.0` → `1.2.0` |
+| 文件 | 类型 | 改动行数 | 改了什么 |
+| :--- | :--- | ---: | :--- |
+| `eg/tray.py` | **新** | 405 | 系统托盘：三态图标、悬停结论、右键菜单、泄漏气泡。用 win32gui 直接调 `Shell_NotifyIconW`，**不引入 pystray**。带逐步日志（`_log()`）—— windowed exe 没有控制台，托盘又在独立线程里，出问题本来完全没线索 |
+| `tools/make_icon.py` | **新** | 105 | 用 Pillow 画多尺寸 `.ico`（10 种尺寸）。图形语义：盾牌 + 被掐断的连接 + 右下角小锁 |
+| `eg/dashboard.py` | 改 | 62 | `_setup_logging()`：stdout/stderr 落 `logs/dashboard.log`（2MB 轮转）。托盘接进 `run_window()` |
+| `eg/core.py` | 改 | 90 | `diagnostics()` 与 `--diag`：一次说清冻结环境下哪些模块/资源可用。`/api/zero_leak` 端点 |
+| `eg/paths.py` | 改 | 12 | `resource()` 改**变参** |
+| `tools/build_exe.py` | 改 | 34 | `version_info.txt` 移到系统临时目录；加 `--icon`、`--add-data assets`、`--version-file` |
+| `tests/acceptance_exe.py` | 改 | 106 | 新增 `e8_tray_and_icon()`：图标、版本资源、`--diag`、**用 `IsWindow` 校验托盘窗口真的存在**、状态轮询活着 |
 
 ### Added
 
@@ -53,21 +188,8 @@ v1.1.0 在**功能**上是完整的（零泄漏自检 + 自动修复 + 119 项�
 | 1 | `version_info.txt` 写在 `build\` 里，被 `--clean` 清掉 | **第二个 exe 必然构建失败**，表现为"第一个成功第二个失败"，像随机问题 |
 | 2 | `resource()` 只收一个参数，托盘按两个传 | `TypeError` 被 `try/except` 吞掉 → **托盘静默不出现** |
 | 3 | windowed exe 没有文件日志 | 打包后任何失败都没有现场，只能靠猜 |
-| 4 | 旧 `EgressGuard.exe` 进程占着文件 | 重新打包报 `PermissionError: 拒绝访问` —— 构建脚本该先杀进程 |
-| 5 | `dashboard.py` 缺 `Path`/`os` 导入；`acceptance_exe.py` 缺 `ctypes` | 由本轮新加的**静态扫描**抓出来的（`py_compile` 抓不到这类错） |
-
-### Changed
-
-- 版本号来源：`VERSION` 文件是唯一权威，`__version__` 读它，exe 版本资源也由它生成。
-- 托盘状态轮询分两条路径：问守护 API（毫秒级，3 秒一次）；
-  自己跑零泄漏自检（6 秒起步，降到 30 秒一次）—— 不分青红皂白会拖满 CPU。
-
-### Verified
-
-见 `%LOCALAPPDATA%\EgressGuard\验收报告.md`。本版新增的 E8 项覆盖：
-应用图标存在、两个 exe 的版本资源与 `VERSION` 一致、`--diag` 报告冻结形态、
-冻结环境下 win32gui/webview/PIL 全部可用、托盘模块能导入并加载图标、
-**托盘窗口经 `IsWindow` 校验确实存在**、托盘状态轮询在跑并拿到了状态结论。
+| 4 | 旧 `EgressGuard.exe` 进程占着文件 | 重新打包报 `PermissionError: 拒绝访问` |
+| 5 | `dashboard.py` 缺 `Path`/`os`；`acceptance_exe.py` 缺 `ctypes` | 由本轮新加的**静态扫描**抓出来的（`py_compile` 抓不到这类错） |
 
 ### 排查记录：一个查了半天的假象
 
@@ -93,6 +215,15 @@ IsWindow       = True
 
 **托盘一直是好的，是 `FindWindow` 在冻结形态下查不到。**
 教训写进验收项：**校验窗口存在要用 `IsWindow`，不要用 `FindWindow`**。
+
+### Verified
+
+```
+源码形态：93 / 93 通过，0 未通过
+exe 形态：47 / 47 通过，0 未通过
+────────────────────────────────
+总计：   140 / 140 通过，0 未通过
+```
 
 ---
 
@@ -128,43 +259,37 @@ v1.0.0 是一个**能跑、端到端验过 119/119** 的版本，但它在「不
 | :--- | :--- | :--- |
 | `eg/config.py` | 改 | 新增 `auto_remediate` / `auto_remediate_ipv6` / `auto_remediate_dns` / `remediate_cooldown_s`；`blocked_regions` 补注释说明匹配的是地理库 `regionName+city` 字段 |
 | `eg/enforce.py` | 改 | 新增 `remediate_ipv6()`（封 IPv6 全球单播，**规则改全局不绑接口**，自动覆盖新网卡）、`remediate_dns()`（把物理网卡 DNS 指向隧道）、`rollback_remediation()`（一键还原）、`_load/_save_remediation()`（修复留痕到 `remediation.json`） |
-| `eg/core.py` | 改 | **补 `from .enforce import Enforcer, _run_ps`**（这是本轮最严重的 bug）；新增 `zero_leak_report()` 零泄漏自检、`_auto_remediate()` 自动修复、`--assert` CLI；IPv6 检查项改成**规则感知**（地址还在但已被封堵 → 判通过）；裸奔连接检查改成**先学隧道对端再判**、并区分「正在漏 / 历史痕迹」；两处 `except Exception` 改成打印 traceback 而不是静默吞掉 |
+| `eg/core.py` | 改 | **补 `from .enforce import Enforcer, _run_ps`**（这是本轮最严重的 bug）；新增 `zero_leak_report()` 零泄漏自检、`_auto_remediate()` 自动修复、`--assert` CLI；IPv6 检查项改成**规则感知**；裸奔连接检查改成**先学隧道对端再判**、并区分「正在漏 / 历史痕迹」；两处 `except Exception` 改成打印 traceback 而不是静默吞掉 |
 | `eg/__init__.py` | 改 | `__version__` 改为读 `VERSION` 文件 |
 | `tests/acceptance.py` | 改 | 新增 `t_neg_undefined_names()` 静态扫描（AST 查"用了但没导入"的名字）、`t0_deadman_usable()`（查 BOM + PS 5.1 语法 + 日志目录）、`t11_zero_leak_and_remediate()`；网络参数全部改为**运行时发现**；靶子改用 RFC 5737 文档保留段；T3/T7 按**端口**核对而不是数连接条数 |
-| `tests/acceptance_exe.py` | 改 | 补 `from eg import netinfo as NI`；预清理改用 `_run_ps`（原来引用的 `enf` 不存在）；新增 `--check` 与防连坐回归项；网络参数运行时发现 |
-| `tests/restore_net.ps1` | 改 | **重写并转成 UTF-8 with BOM**（原来无 BOM 导致 PS 5.1 语法崩、脚本一行都跑不了）；日志路径改到统一数据目录；新增清理测试路由（`203.0.113.0/24` 等文档段） |
-| `tests/leak_target.py` | 改 | 加连接重试（原来一次失败就退出，导致"守护掐得太快反而测不到"）；加存活宽限期（被掐后继续活 30 秒，否则通知送达时进程已退出） |
-| `tests/verify_auto_remediate.py` | **新** | 自动修复的端到端验证：修复前 → 打开闸门 → 修复后 → 查修复记录 → 回滚 → 复验 |
-| `tests/exp_guide_to_tunnel.py` | **新** | 「能不能把裸奔流量导回 VPN 出口」的实测实验（结论见 README） |
-| `tests/verify_no_collateral.py` | **新** | 防连坐回归：验证共用宿主不会被整程序封杀、目标级封杀只封一个 IP |
-| `install.ps1` | 改 | 数据目录改统一位置（`%LOCALAPPDATA%\EgressGuard`）；去掉已无必要的"复制 exe 到根目录"；新增给集成方的状态判据说明 |
-| `tools/make_report.py` | 改 | 报告输出改到统一数据目录 |
+| `tests/acceptance_exe.py` | 改 | 补 `from eg import netinfo as NI`；预清理改用 `_run_ps`；新增 `--check` 与防连坐回归项；网络参数运行时发现 |
+| `tests/restore_net.ps1` | 改 | **重写并转成 UTF-8 with BOM**；日志路径改到统一数据目录；新增清理测试路由 |
+| `tests/leak_target.py` | 改 | 加连接重试；加存活宽限期 |
+| `tests/verify_auto_remediate.py` | **新** | 自动修复的端到端验证 |
+| `tests/exp_guide_to_tunnel.py` | **新** | 「能不能把裸奔流量导回 VPN 出口」的实测实验 |
+| `tests/verify_no_collateral.py` | **新** | 防连坐回归 |
+| `install.ps1` | 改 | 数据目录改统一位置；去掉已无必要的"复制 exe 到根目录"；新增给集成方的状态判据说明 |
 | `闸门状态.bat` | **新** | 给集成方的一键状态检查（`--check`） |
 | `VERSION` / `CHANGELOG.md` / `.gitignore` | **新** | 版本化基础设施 |
-| `README.md` | 改 | 补「导回隧道」实测结论、反馈 9 条逐条处理、给集成方的状态判据、数据目录统一说明；修正全部过期路径 |
 
 ### Added
 
 - **结构性泄漏自动修复**：物理网卡上出现全局 IPv6 → 自动装规则封堵（规则改为**全局**，新网卡自动覆盖）；
   物理网卡用了非隧道 DNS → 自动指向隧道 DNS。修复动作记进 `remediation.json`，可一键回滚。
-  只做 `enabled=True` 时才动手；观察档会明确告诉你"检测到 N 项，闸门未启用所以没修"。
 - **零泄漏自检**：`EgressGuardCore.exe --assert`（或 `/api/zero_leak`）给出一句话结论 +
   逐项依据，**退出码 0=零泄漏 / 1=有泄漏**，可以直接当脚本门禁。
-- **静态扫描回归项**：AST 扫全项目"用了但没导入"的名字 —— 这类错误 `py_compile` 抓不到，
-  只有跑到那一行才炸，而兜底 `except` 又会把它藏起来（本轮踩了两次）。
+- **静态扫描回归项**：AST 扫全项目"用了但没导入"的名字。
 - **死亡开关可用性检查**：查 BOM、查 PS 5.1 语法、查日志目录。
 - **集成方状态判据**：`--check` 明确区分「运行中 / 正在重启 / 已停止 / 未运行」。
 
 ### Changed
 
-- 隔离粒度：**「程序」→「程序→目标」**。共用宿主（`python.exe`/`java.exe`/`svchost.exe` 等 40 个）
-  与工具自身永不整程序封杀 —— 原来一个 python 脚本裸奔会让全机所有 Python 程序断网，
-  而源码形态下守护自己就是 `python.exe`，等于自杀。
-- IPv6 封堵规则从"绑当时那块网卡"改成**全局**，新出现的网卡自动覆盖。
-- IPv6 检查项从"看地址在不在"改成**规则感知**（地址还在但已被封堵 → 判通过）。
-- 验收靶子从真实服务器改成 **RFC 5737 文档保留段**（`203.0.113.0/24`），测试流量一眼可辨。
-- 测试网络参数全部**运行时发现**，不再硬编码 IP / 网关 / ifIndex。
-- 数据目录统一到 `%LOCALAPPDATA%\EgressGuard\`（源码与 exe 共用同一份配置）。
+- 隔离粒度：**「程序」→「程序→目标」**。共用宿主与工具自身永不整程序封杀。
+- IPv6 封堵规则从"绑当时那块网卡"改成**全局**。
+- IPv6 检查项从"看地址在不在"改成**规则感知**。
+- 验收靶子从真实服务器改成 **RFC 5737 文档保留段**。
+- 测试网络参数全部**运行时发现**。
+- 数据目录统一到 `%LOCALAPPDATA%\EgressGuard\`。
 - 所有 `.ps1` 强制 UTF-8 **with BOM**。
 
 ### Fixed
@@ -172,14 +297,14 @@ v1.0.0 是一个**能跑、端到端验过 119/119** 的版本，但它在「不
 | # | 问题 | 后果 |
 | ---: | :--- | :--- |
 | 1 | `core.py` 漏 `from .enforce import _run_ps` | 启动自检的残留路由清理、IPv6 规则查询**全部静默失效** |
-| 2 | `acceptance_exe.py` 漏 `from eg import netinfo as NI` | `_phys_nic()` 抛 `NameError` 被吞，伪装成"找不到物理网卡"，E5 全挂 |
-| 3 | `acceptance_exe.py` 预清理引用了不存在的 `enf` | 清理从未生效，下一轮靶子被残留规则挡住（`WinError 10013`） |
-| 4 | `restore_net.ps1` 无 BOM | **死亡开关一行都跑不了** —— 切网实验的安全兜底一直是坏的 |
-| 5 | 测试硬编码 IP / 网关 / ifIndex | 机器网络一变（实测变过两次）整套验收全挂 |
+| 2 | `acceptance_exe.py` 漏 `from eg import netinfo as NI` | 伪装成"找不到物理网卡"，E5 全挂 |
+| 3 | `acceptance_exe.py` 预清理引用了不存在的 `enf` | 清理从未生效，下一轮靶子被残留规则挡住 |
+| 4 | `restore_net.ps1` 无 BOM | **死亡开关一行都跑不了** |
+| 5 | 测试硬编码 IP / 网关 / ifIndex | 机器网络一变整套验收全挂 |
 | 6 | IPv6 规则绑接口 | 新网卡出现后旁路重新打开 |
-| 7 | IPv6 检查只看地址存在 | 自动修复生效了还在报"有泄漏"，让人误判成"修了没用" |
+| 7 | IPv6 检查只看地址存在 | 自动修复生效了还在报"有泄漏" |
 | 8 | 零泄漏自检没先学隧道对端 | 把隧道自己的外层传输报成裸奔，100+ 条假阳性 |
-| 9 | 多处 `except Exception: pass` | 把编程错误伪装成"环境问题"，排查成本极高 |
+| 9 | 多处 `except Exception: pass` | 把编程错误伪装成"环境问题" |
 
 ### Verified
 
@@ -190,17 +315,13 @@ exe 形态：35 / 35 通过，0 未通过
 总计：   128 / 128 通过，0 未通过
 ```
 
-自动修复的端到端实测（`tests/verify_auto_remediate.py`）：
+自动修复的端到端实测：
 
 | 阶段 | zero_leak | 结论 |
 | :--- | :--- | :--- |
 | 修复前（闸门关闭） | `false` | 有泄漏：2 项结构性问题 + 1 项动态问题 |
 | 修复后（闸门开启） | `false` | 有泄漏：1 项动态问题（**结构上是干净的**） |
 | 回滚后 | `false` | 恢复到 2 项结构性问题 |
-
-被自动修掉的项：`['无 IPv6 旁路']`、`['无 DNS 泄漏']`。
-实测现场：`以太网 2`（新出现的网卡）和 `WLAN 3` 都带着公网 IPv6
-`2408:896e:1:1fb6::/64`（中国联通），两块网卡 DNS 都是 `192.168.0.1`。
 
 ---
 
