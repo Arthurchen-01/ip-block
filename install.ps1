@@ -271,6 +271,10 @@ Say "    3. 无误报后打开「闸门」开关 -> 此时是演练档（只通�
 Say "    4. 再确认一轮，最后关掉「演练」进入实弹" 'Yellow'
 Say ""
 Say "  紧急恢复：仪表盘上的红色「紧急恢复网络」按钮，或跑 卸载_右键管理员运行.bat" 'DarkGray'
+Say "  系统托盘   : 启动仪表盘后，托盘图标会常驻（绿=零泄漏 / 红=有泄漏 / 黄=闸门未启用）" 'White'
+Say "                 右键图标可查零泄漏自检、开关闸门、打开数据目录与日志" 'DarkGray'
+Say "  零泄漏自检 : $(Join-Path $Root 'dist\EgressGuardCore.exe') --assert   （退出码 0=零泄漏，1=有泄漏）" 'DarkGray'
+Say ""
 Say "  集成方怎么判断闸门状态：" 'DarkGray'
 Say "    1. GET http://127.0.0.1:$apiPort/api/health   -> 通了就是活着" 'DarkGray'
 Say "    2. 连不上时读 $(Join-Path $dataDir 'state.json')" 'DarkGray'

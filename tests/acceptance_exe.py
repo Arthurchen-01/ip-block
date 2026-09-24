@@ -22,6 +22,7 @@ acceptance.py 直接 import eg.* 模块，测的是源码形态的能力。
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import subprocess
@@ -593,6 +594,156 @@ def e7_no_python_needed() -> None:
           f"输出 {nopy.stat().st_size} 字节" if got else f"失败：{o[:160]}")
 
 
+def e8_tray_and_icon() -> None:
+    """v1.2.0 新增：托盘图标、应用图标、打包自诊断。
+
+    这一段是"像不像一个软件"的客观检查：
+      - exe 有没有自己的图标（还是 PyInstaller 那个通用图标）
+      - 属性里的版本号对不对
+      - 托盘窗口到底建没建起来
+      - 冻结环境下依赖齐不齐（--diag）
+
+    ⚠ 托盘这项**必须用 IsWindow 校验，不能用 FindWindow**。
+    实测：托盘自己在日志里写了 CreateWindow 成功、Shell_NotifyIcon 返回 1，
+    而外部用 FindWindow('EgressGuardTray') 查却是 0 —— 一度以为托盘没起来。
+    最后让托盘把自己的 hwnd 写进文件、外部拿它 IsWindow 才确认它确实存在。
+    """
+    section("E8 · 托盘图标 / 应用图标 / 打包自诊断")
+
+    ico = ROOT / "assets" / "egressguard.ico"
+    check("应用图标文件存在（不再是 PyInstaller 默认图标）", ico.exists(),
+          f"{ico.stat().st_size} 字节" if ico.exists() else "缺失")
+
+    # exe 版本资源必须和 VERSION 一致
+    import ctypes as _c
+    from ctypes import wintypes as _w
+
+    # VS_FIXEDFILEINFO 的正确布局：
+    #   DWORD dwSignature;      必须是 0xFEEF04BD，用它当自检
+    #   DWORD dwStrucVersion;
+    #   DWORD dwFileVersionMS;  = (major << 16) | minor
+    #   DWORD dwFileVersionLS;  = (build << 16) | revision
+    #   ...（后面还有 9 个 DWORD）
+    # ⚠ 我第一版把第一个字段当成 cbSize、把版本号当成四个独立 DWORD 读，
+    #   于是读出 65536.65538.0.65538 这种垃圾值，检查必然失败。
+    class _VS(ctypes.Structure):
+        _fields_ = [("dwSignature", _w.DWORD), ("dwStrucVersion", _w.DWORD),
+                    ("dwFileVersionMS", _w.DWORD), ("dwFileVersionLS", _w.DWORD),
+                    ("dwProductVersionMS", _w.DWORD), ("dwProductVersionLS", _w.DWORD),
+                    ("dwFileFlagsMask", _w.DWORD), ("dwFileFlags", _w.DWORD),
+                    ("dwFileOS", _w.DWORD), ("dwFileType", _w.DWORD),
+                    ("dwFileSubtype", _w.DWORD), ("dwFileDateMS", _w.DWORD),
+                    ("dwFileDateLS", _w.DWORD)]
+
+    want = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    for exe, label in ((CORE_EXE, "EgressGuardCore.exe"),
+                       (DASH_EXE, "EgressGuard.exe")):
+        try:
+            size = _c.windll.version.GetFileVersionInfoSizeW(str(exe), None)
+            buf = ctypes.create_string_buffer(size)
+            _c.windll.version.GetFileVersionInfoW(str(exe), 0, size, buf)
+            r = ctypes.c_void_p()
+            ln = _w.UINT()
+            _c.windll.version.VerQueryValueW(buf, "\\", ctypes.byref(r),
+                                             ctypes.byref(ln))
+            v = ctypes.cast(r, ctypes.POINTER(_VS)).contents
+            # 自检：签名不对说明读错了结构，别拿垃圾值去比
+            sig_ok = (v.dwSignature == 0xFEEF04BD)
+            ms, ls = v.dwFileVersionMS, v.dwFileVersionLS
+            ver = f"{ms >> 16}.{ms & 0xFFFF}.{ls >> 16}.{ls & 0xFFFF}"
+            check(f"{label} 版本资源结构签名正确", sig_ok,
+                  f"dwSignature=0x{v.dwSignature:08X}（应为 0xFEEF04BD）")
+            if not sig_ok:
+                return
+            check(f"{label} 版本资源与 VERSION 一致（{want}）",
+                  ver.startswith(want), f"exe 报 {ver}，VERSION 是 {want}")
+        except Exception as e:
+            check(f"{label} 版本资源可读", False, f"{type(e).__name__}: {e}")
+
+    # --diag：冻结环境依赖完整性
+    tmpd = DATA_DIR / "_exe_diag.json"
+    rc, txt = run_exe(CORE_EXE, ["--diag"], timeout=120, out_file=tmpd)
+    d = {}
+    try:
+        d = json.loads(txt)
+    except Exception:
+        pass
+    mods = d.get("modules", {}) or {}
+    # ⚠ 只要求**真正必需**的模块。
+    #   第一版把 pythoncom / pywintypes / PIL.Image 也当成必须可用，
+    #   于是打包后必然报失败 —— 但那三个托盘压根不用：
+    #     - 托盘只用 win32gui / win32api / win32con（它们都 OK）
+    #     - PIL 只在**生成图标**时用，运行时读的是已经打好的 .ico
+    #   把"非必需项不可用"报成失败，只会让报告失真。
+    NEEDED = ("win32gui", "win32api", "win32con", "webview")
+    missing = [m for m in NEEDED if not (mods.get(m) or {}).get("ok")]
+    optional_bad = [k for k, v in mods.items()
+                    if not v.get("ok") and k not in NEEDED]
+    check("--diag 可用且报告冻结形态", d.get("frozen") is True,
+          f"frozen={d.get('frozen')} python={d.get('python')}")
+    check("打包后必需模块全部可用（win32gui/win32api/win32con/webview）",
+          not missing,
+          f"缺 {missing}" if missing else
+          f"共 {len(mods)} 个模块，必需项齐全")
+    if optional_bad:
+        out(f"  [INFO] 非必需模块不可用（不影响功能）：{optional_bad}")
+    tray_diag = d.get("tray", {}) or {}
+    check("打包后托盘模块可导入且能加载图标",
+          tray_diag.get("import") == "ok"
+          and int(tray_diag.get("icons_loaded") or 0) >= 1,
+          f"import={tray_diag.get('import')} "
+          f"icons={tray_diag.get('icons_loaded')}")
+
+    # 托盘真的建出窗口了
+    hf = DATA_DIR / "tray_hwnd.txt"
+    hf.unlink(missing_ok=True)
+    import socket as _sock
+    s = _sock.socket()
+    s.bind(("127.0.0.1", 0))
+    free_port = s.getsockname()[1]
+    s.close()
+    dash = subprocess.Popen([str(DASH_EXE), "--port", str(free_port)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        got = False
+        for _ in range(45):
+            time.sleep(2)
+            if hf.exists():
+                got = True
+                break
+        if not got:
+            check("托盘窗口已创建（hwnd 落盘）", False,
+                  f"等了 90 秒 {hf} 仍不存在 —— 见 logs/dashboard.log")
+            return
+        hv = int(hf.read_text(encoding="utf-8").strip())
+        user32 = ctypes.windll.user32
+        isw = bool(user32.IsWindow(hv))
+        cn = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hv, cn, 256)
+        check("托盘窗口确实存在（IsWindow 校验）", isw, f"hwnd={hv}")
+        check("托盘窗口类名正确", cn.value == "EgressGuardTray",
+              f"类名='{cn.value}'")
+        time.sleep(10)
+        log = DATA_DIR / "logs" / "dashboard.log"
+        lt = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+        tray_lines = [ln for ln in lt.splitlines() if "[tray]" in ln]
+        check("托盘状态轮询在跑（日志里有状态行）",
+              any("状态 ->" in ln or "心跳 #" in ln for ln in tray_lines),
+              " | ".join(tray_lines[-3:])[-260:] or "日志里没有托盘记录")
+        check("托盘拿到了状态结论（说明 API 或自检通了）",
+              any("状态 ->" in ln for ln in tray_lines),
+              " | ".join(ln for ln in tray_lines if "状态 ->" in ln)[-200:]
+              or "还没刷新出状态")
+    finally:
+        try:
+            dash.terminate()
+            dash.wait(timeout=10)
+        except Exception:
+            pass
+        kill_exe("EgressGuard.exe")
+        kill_exe("msedgewebview2.exe")
+
+
 def main() -> int:
     global _LOGFH
     ap = argparse.ArgumentParser()
@@ -675,6 +826,7 @@ def main() -> int:
             e5_live_enforcement(token)
         e6_dashboard()
         e7_no_python_needed()
+        e8_tray_and_icon()
     except BaseException:
         import traceback
         check("验收流程未抛异常", False, traceback.format_exc()[-800:])

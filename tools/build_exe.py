@@ -75,7 +75,14 @@ def write_version_resource() -> Path:
   ]
 )
 """
-    p = BUILD / "version_info.txt"
+    # ⚠ 绝不能放在 build/ 里。
+    #   PyInstaller 的 --clean 会把 workpath/specpath 清掉，
+    #   而 version_info.txt 是构建**输入**，清掉之后 spec 加载它就
+    #   FileNotFoundError。实测踩过：第一个 exe 成功、第二个失败，
+    #   报错是 "No such file or directory: build/version_info.txt"。
+    #   放到系统临时目录，构建过程永远碰不到它。
+    import tempfile
+    p = Path(tempfile.gettempdir()) / "egressguard_version_info.txt"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return p
@@ -98,6 +105,15 @@ def build_one(name: str, entry: str, windowed: bool = True,
         # 保证 exe 报的版本和仓库里的 VERSION 永远一致
         "--add-data", f"{ROOT / 'VERSION'};.",
         "--version-file", str(write_version_resource()),
+        # 应用图标：不然任务栏/资源管理器里是 PyInstaller 那个通用图标，
+        # 一眼看得出是脚本打的包
+        "--icon", str(ROOT / "assets" / "egressguard.ico"),
+        "--add-data", f"{ROOT / 'assets'};assets",
+        # 托盘图标要能自己重画（用户删了 assets 也能起来）
+        "--hidden-import", "PIL._tkinter_finder",
+        "--hidden-import", "win32gui",
+        "--hidden-import", "win32api",
+        "--hidden-import", "win32con",
         # 隐藏 import：pywebview 的平台后端是动态加载的，静态分析抓不到
         "--hidden-import", "webview",
         "--hidden-import", "webview.platforms.edgechromium",

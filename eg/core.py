@@ -1068,6 +1068,10 @@ class GuardCore:
                                         "已被主动切断。"),
                         })
 
+                    # 零泄漏自检（托盘和集成方都用这个）
+                    if path == "/api/zero_leak":
+                        return self._send(200, zero_leak_report(core))
+
                     # 全局最近一次拦截 —— 和 /api/why 分开，避免语义混淆
                     if path == "/api/last_violation":
                         lv = core.notifier.last_violation()
@@ -1563,6 +1567,63 @@ def zero_leak_report(core=None) -> dict:
     }
 
 
+def diagnostics() -> dict:
+    """打包后自诊断：把"冻结环境下什么可用、什么不可用"一次说清楚。
+
+    为什么需要：源码形态跑得好好的功能，打包成 exe 后可能因为
+    缺 DLL / 缺 hidden-import 而静默失效。实测踩过：托盘在源码形态
+    正常创建窗口，打包后 `FindWindow('EgressGuardTray')` 返回 0 ——
+    windowed exe 没有控制台，异常全被吞掉，只能靠猜。
+    """
+    import importlib
+    out: dict = {
+        "version": __version__,
+        "frozen": getattr(sys, "frozen", False),
+        "executable": sys.executable,
+        "python": sys.version.split()[0],
+        "pid": os.getpid(),
+        "is_admin": None,
+        "modules": {},
+        "resources": {},
+        "tray": {},
+    }
+    for m in ("win32gui", "win32api", "win32con", "pythoncom", "pywintypes",
+              "PIL", "PIL.Image", "webview", "clr", "ctypes"):
+        try:
+            mod = importlib.import_module(m)
+            out["modules"][m] = {"ok": True,
+                                 "version": str(getattr(mod, "__version__", ""))}
+        except Exception as e:
+            out["modules"][m] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    for rel in ("eg/ui.html", "assets/egressguard.ico", "VERSION"):
+        try:
+            p = resource(rel)
+            out["resources"][rel] = {"path": str(p), "exists": p.exists()}
+        except Exception as e:
+            out["resources"][rel] = {"error": f"{type(e).__name__}: {e}"}
+
+    try:
+        from .tray import TrayApp, _HAS_WIN32
+        out["tray"]["import"] = "ok"
+        out["tray"]["_HAS_WIN32"] = _HAS_WIN32
+        app = TrayApp(Config())
+        app._load_icons()
+        out["tray"]["icons_loaded"] = len(app._icons)
+        out["tray"]["icon_handles"] = {k: int(v) for k, v in app._icons.items()}
+    except Exception as e:
+        import traceback
+        out["tray"]["import"] = f"{type(e).__name__}: {e}"
+        out["tray"]["traceback"] = traceback.format_exc()[-800:]
+
+    try:
+        import ctypes as _c
+        out["is_admin"] = bool(_c.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        pass
+    return out
+
+
 def probe_gateway(port: int | None = None, timeout: float = 2.0) -> dict:
     import urllib.request
 
@@ -1665,6 +1726,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--leak-test", action="store_true", help="做一次泄漏体检然后退出")
     ap.add_argument("--calibrate", action="store_true", help="标定本机真实出口 IP")
     ap.add_argument("--status", action="store_true", help="打印当前状态 JSON")
+    ap.add_argument("--diag", action="store_true",
+                    help="打包后自诊断：冻结环境下哪些模块/资源可用")
     ap.add_argument("--assert", dest="assert_zero", action="store_true",
                     help="零泄漏自检：给出「当前是否零泄漏」的明确结论与逐项依据。"
                          "退出码 0=零泄漏，1=有泄漏 —— 可以直接用在脚本里当门禁")
@@ -1698,6 +1761,10 @@ def main(argv: list[str] | None = None) -> int:
         if not (args.status or args.once or args.leak_test or args.probe
                 or args.calibrate):
             return 0
+
+    if args.diag:
+        emit(json.dumps(diagnostics(), ensure_ascii=False, indent=2, default=str))
+        return 0
 
     if args.assert_zero:
         rep = zero_leak_report(core)

@@ -43,9 +43,20 @@ def resource_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def resource(rel: str) -> Path:
-    """取一个随程序分发的只读资源（如 ui.html）。"""
-    return resource_root() / rel
+def resource(rel: str, *more: str) -> Path:
+    """取一个随程序分发的只读资源（如 ui.html）。
+
+    支持两种写法，效果一样：
+        resource("eg/ui.html")
+        resource("assets", "egressguard.ico")
+
+    变参是后来加的：我第一版只接受一个参数，却在托盘代码里按
+    `resource("assets", "egressguard.ico")` 调，于是托盘图标加载直接
+    TypeError，而那段又在 try/except 里 —— 表现为"托盘就是不出现"，
+    排查时完全看不出是参数个数问题。接受变参就不会再犯。
+    """
+    parts = (rel,) + more
+    return resource_root().joinpath(*parts)
 
 
 def data_dir() -> Path:

@@ -1,5 +1,101 @@
 # 变更记录
 
+## [1.2.0] - 2026-09-24
+
+> 版本跨度：`v1.1.0` → `v1.2.0`（基线提交 `5c60e02` / 上一个 tag `v1.1.0`）
+> 代码量：`39 个文件，11300+ 行`（新增 `eg/tray.py`、`tools/make_icon.py`、`assets/`）
+> 本版主题：**从"能跑的脚本"变成"像一个软件"** —— 应用图标、系统托盘、打包自诊断、
+> 无控制台环境下的文件日志。同时修掉 4 个只在打包形态才暴露的 bug。
+
+### 上一版（v1.1.0）的代码状态 —— 改之前是什么样
+
+v1.1.0 在**功能**上是完整的（零泄漏自检 + 自动修复 + 119 项验收全过），
+但它交付出来的东西**不像一个软件**：
+
+| 文件 / 形态 | v1.1.0 时的状态 |
+| :--- | :--- |
+| `dist\*.exe` | **用的是 PyInstaller 的默认图标**。任务栏、资源管理器、Alt+Tab、属性页里全是那个通用图标，一眼就能看出是脚本打的包。属性 -> 详细信息里**版本号是空的**。 |
+| 整个产品形态 | **没有任何常驻的可见入口**。闸门是常驻防护，但要问"现在有没有在漏"，必须先双击 `启动仪表盘.bat` 把窗口开出来。关掉窗口之后，它对用户就"不存在"了。 |
+| `eg/dashboard.py` | **没有文件日志**。`--windowed` 打的 exe 没有控制台，任何 `print` 都进黑洞 —— 一旦打包后某处失败，现场什么都不剩。 |
+| `tools/build_exe.py` | `version_info.txt` 写在 `build\` 里，而 PyInstaller 的 `--clean` 会把 `build\` 清掉 → **第二个 exe 必然构建失败**（`FileNotFoundError`）。表现是"第一个成功、第二个失败"，看着像随机问题。 |
+| `eg/paths.py` | `resource()` 只接受一个参数。托盘代码按 `resource("assets", "egressguard.ico")` 调 → `TypeError`，而那段在 `try/except` 里 → **托盘静默不出现**。 |
+| `eg/tray.py` | **不存在**。 |
+| `tests/acceptance_exe.py` | 没有任何"像不像软件"的检查项 —— 图标、版本资源、托盘、冻结环境依赖完整性，全都没测。 |
+
+### 本次改动的文件 —— 改了什么
+
+| 文件 | 类型 | 改动 |
+| :--- | :--- | :--- |
+| `eg/tray.py` | **新** | 系统托盘：三态图标（绿=零泄漏 / 红=有泄漏 / 黄=闸门未启用）、悬停结论、右键菜单（打开仪表盘 / 零泄漏自检 / 开关闸门 / 打开数据目录 / 打开事件日志 / 退出）、泄漏气泡通知。用 win32gui 直接调 `Shell_NotifyIconW`，**不引入 pystray**。带逐步日志（`_log()`）—— 因为 windowed exe 没有控制台，托盘又在独立线程里，出问题本来完全没线索。 |
+| `tools/make_icon.py` | **新** | 用 Pillow 画多尺寸 `.ico`（10 种尺寸）。图形语义：盾牌 + 被掐断的连接 + 右下角小锁。仓库自洽，不含二进制美术文件。 |
+| `assets/egressguard.ico` | **新** | 应用图标（40 KB，10 种尺寸） |
+| `assets/icon_ok.png` / `icon_leak.png` | **新** | 托盘与文档用的两种状态图 |
+| `eg/dashboard.py` | 改 | 新增 `_setup_logging()`：把 stdout/stderr 落到 `logs/dashboard.log`（2MB 轮转）。**windowed exe 必须有这个**，否则打包后出问题什么都看不到。托盘接进 `run_window()`：`on_open_dashboard` 恢复并置顶已有窗口、`on_exit` 真正结束进程。新增 `--no-tray`。 |
+| `eg/core.py` | 改 | 新增 `diagnostics()` 与 `--diag`：一次说清冻结环境下哪些模块/资源可用（win32gui / PIL / webview / pythoncom / 图标 / VERSION）。新增 `/api/zero_leak` 端点（托盘和集成方共用）。 |
+| `eg/paths.py` | 改 | `resource()` 改**变参**：`resource("eg/ui.html")` 和 `resource("assets", "x.ico")` 都行。 |
+| `tools/build_exe.py` | 改 | `version_info.txt` 移到系统临时目录（`--clean` 碰不到）；加 `--icon`、`--add-data assets`、`--version-file`；补 `win32gui/win32api/win32con` 的 hidden-import。 |
+| `tests/acceptance_exe.py` | 改 | 新增 `e8_tray_and_icon()`：查图标文件、查 exe 版本资源与 `VERSION` 一致、跑 `--diag` 查冻结依赖、**用 `IsWindow` 校验托盘窗口真的存在**、查托盘状态轮询活着。 |
+| `VERSION` | 改 | `1.1.0` → `1.2.0` |
+
+### Added
+
+- **应用图标**：盾牌 + 被掐断的连接 + 小锁，10 种尺寸的 `.ico`，两个 exe 都用它。
+- **系统托盘常驻**：闸门终于有了一个常驻的可见入口。图标颜色一眼看出状态，
+  右键能查零泄漏自检、开关闸门、打开数据目录/日志，发现泄漏会弹气泡。
+- **打包自诊断 `--diag`**：一次输出冻结环境下所有依赖的可用性。
+- **无控制台环境的文件日志**：`logs/dashboard.log`，2MB 轮转。
+- **`/api/zero_leak`**：把零泄漏结论开放给托盘和集成方。
+
+### Fixed
+
+| # | 问题 | 后果 |
+| ---: | :--- | :--- |
+| 1 | `version_info.txt` 写在 `build\` 里，被 `--clean` 清掉 | **第二个 exe 必然构建失败**，表现为"第一个成功第二个失败"，像随机问题 |
+| 2 | `resource()` 只收一个参数，托盘按两个传 | `TypeError` 被 `try/except` 吞掉 → **托盘静默不出现** |
+| 3 | windowed exe 没有文件日志 | 打包后任何失败都没有现场，只能靠猜 |
+| 4 | 旧 `EgressGuard.exe` 进程占着文件 | 重新打包报 `PermissionError: 拒绝访问` —— 构建脚本该先杀进程 |
+| 5 | `dashboard.py` 缺 `Path`/`os` 导入；`acceptance_exe.py` 缺 `ctypes` | 由本轮新加的**静态扫描**抓出来的（`py_compile` 抓不到这类错） |
+
+### Changed
+
+- 版本号来源：`VERSION` 文件是唯一权威，`__version__` 读它，exe 版本资源也由它生成。
+- 托盘状态轮询分两条路径：问守护 API（毫秒级，3 秒一次）；
+  自己跑零泄漏自检（6 秒起步，降到 30 秒一次）—— 不分青红皂白会拖满 CPU。
+
+### Verified
+
+见 `%LOCALAPPDATA%\EgressGuard\验收报告.md`。本版新增的 E8 项覆盖：
+应用图标存在、两个 exe 的版本资源与 `VERSION` 一致、`--diag` 报告冻结形态、
+冻结环境下 win32gui/webview/PIL 全部可用、托盘模块能导入并加载图标、
+**托盘窗口经 `IsWindow` 校验确实存在**、托盘状态轮询在跑并拿到了状态结论。
+
+### 排查记录：一个查了半天的假象
+
+托盘在**源码形态**下 `FindWindow('EgressGuardTray')` 能查到（返回 3414160），
+打包后查却是 **0**，但托盘自己的日志明确写着：
+
+```
+[tray] CreateWindow -> hwnd=9179490
+[tray] Shell_NotifyIcon(NIM_ADD) -> 1（1=成功）    ← MSDN：1 就是成功
+[tray] 进入消息循环 PumpMessages
+[tray] 气泡通知已发（启动提示）
+[tray] 状态 -> off  「闸门未启用（观察档）—— 有泄漏：1 项结构性问题 + 1 项动态问题」
+```
+
+最后让**托盘把自己的 hwnd 写进 `tray_hwnd.txt`**，外部拿它做 `IsWindow` 校验：
+
+```
+托盘自报 hwnd = 43451340
+IsWindow       = True
+窗口类名       = 'EgressGuardTray'
+窗口标题       = 'EgressGuard'
+```
+
+**托盘一直是好的，是 `FindWindow` 在冻结形态下查不到。**
+教训写进验收项：**校验窗口存在要用 `IsWindow`，不要用 `FindWindow`**。
+
+---
+
 ## [1.1.0] - 2026-09-24
 
 > 版本跨度：`v1.0.0` → `v1.1.0`
@@ -33,8 +129,8 @@ v1.0.0 是一个**能跑、端到端验过 119/119** 的版本，但它在「不
 | `eg/config.py` | 改 | 新增 `auto_remediate` / `auto_remediate_ipv6` / `auto_remediate_dns` / `remediate_cooldown_s`；`blocked_regions` 补注释说明匹配的是地理库 `regionName+city` 字段 |
 | `eg/enforce.py` | 改 | 新增 `remediate_ipv6()`（封 IPv6 全球单播，**规则改全局不绑接口**，自动覆盖新网卡）、`remediate_dns()`（把物理网卡 DNS 指向隧道）、`rollback_remediation()`（一键还原）、`_load/_save_remediation()`（修复留痕到 `remediation.json`） |
 | `eg/core.py` | 改 | **补 `from .enforce import Enforcer, _run_ps`**（这是本轮最严重的 bug）；新增 `zero_leak_report()` 零泄漏自检、`_auto_remediate()` 自动修复、`--assert` CLI；IPv6 检查项改成**规则感知**（地址还在但已被封堵 → 判通过）；裸奔连接检查改成**先学隧道对端再判**、并区分「正在漏 / 历史痕迹」；两处 `except Exception` 改成打印 traceback 而不是静默吞掉 |
-| `eg/__init__.py` | 改 | `__version__` `1.0.0` → `1.1.0` |
-| `tests/acceptance.py` | 改 | 新增 `t_neg_undefined_names()` 静态扫描（AST 查"用了但没导入"的名字）、`t0_deadman_usable()`（查 BOM + PS 5.1 语法 + 日志目录）；网络参数全部改为**运行时发现**；靶子改用 RFC 5737 文档保留段；T3/T7 按**端口**核对而不是数连接条数 |
+| `eg/__init__.py` | 改 | `__version__` 改为读 `VERSION` 文件 |
+| `tests/acceptance.py` | 改 | 新增 `t_neg_undefined_names()` 静态扫描（AST 查"用了但没导入"的名字）、`t0_deadman_usable()`（查 BOM + PS 5.1 语法 + 日志目录）、`t11_zero_leak_and_remediate()`；网络参数全部改为**运行时发现**；靶子改用 RFC 5737 文档保留段；T3/T7 按**端口**核对而不是数连接条数 |
 | `tests/acceptance_exe.py` | 改 | 补 `from eg import netinfo as NI`；预清理改用 `_run_ps`（原来引用的 `enf` 不存在）；新增 `--check` 与防连坐回归项；网络参数运行时发现 |
 | `tests/restore_net.ps1` | 改 | **重写并转成 UTF-8 with BOM**（原来无 BOM 导致 PS 5.1 语法崩、脚本一行都跑不了）；日志路径改到统一数据目录；新增清理测试路由（`203.0.113.0/24` 等文档段） |
 | `tests/leak_target.py` | 改 | 加连接重试（原来一次失败就退出，导致"守护掐得太快反而测不到"）；加存活宽限期（被掐后继续活 30 秒，否则通知送达时进程已退出） |
@@ -88,14 +184,11 @@ v1.0.0 是一个**能跑、端到端验过 119/119** 的版本，但它在「不
 ### Verified
 
 ```
-源码形态：84 / 84 通过，0 未通过
+源码形态：93 / 93 通过，0 未通过
 exe 形态：35 / 35 通过，0 未通过
 ────────────────────────────────
-总计：   119 / 119 通过，0 未通过
+总计：   128 / 128 通过，0 未通过
 ```
-
-这是 **v1.0.0 的验收结果**（本轮改动后会在 v1.1.0 重跑一遍，结果记在
-`%LOCALAPPDATA%\EgressGuard\验收报告.md`）。
 
 自动修复的端到端实测（`tests/verify_auto_remediate.py`）：
 
